@@ -24,7 +24,9 @@ SmartQueue replaces vanilla Minecraft's "Server Full" rejection with a configura
 - **Configurable player cap** — set `effective_max_players` lower than `server.properties max-players` to reserve slots or enforce queueing
 - **VIP exclusive slots** — reserve a portion of server capacity exclusively for VIP players, ensuring premium users can always get in
 - **Real-time queue screen** — position, total queued, players ahead, estimated wait time
-- **Priority tiers** — Staff (highest), VIP, and Normal players, each with independent admission intervals
+- **Priority tiers** — Staff (highest), VIP, and Normal players, with configurable admission modes
+- **Proportional admission mode** — optional ratio-based admission (e.g., "3 VIPs then 2 normals") with anti-imbalance protection to prevent normals from being starved
+- **Four independent queues** — Staff, Priority Rejoin, VIP, and Normal queues with strict admission order
 - **Rejoin with position recovery** — disconnect and come back within the grace window to keep your place in line
 - **Automatic slot refill** — safety net on every tick ensures no slot stays empty when players are waiting
 - **Pause / resume** — freeze the queue during maintenance without kicking anyone
@@ -72,13 +74,45 @@ During this phase:
 
 ### Admission
 
+SmartQueue supports two admission modes, controlled by the `proportional_mode` config option.
+
+#### Legacy Mode (`proportional_mode = false`, default)
+
 Each server tick, two independent admission timers run:
 - **VIP timer** (default: every 40 ticks / 2 seconds) — admits the first queued Staff or VIP player
 - **Normal timer** (default: every 100 ticks / 5 seconds) — admits the first queued Normal player
 
-Both timers only fire when `activeCount() < effective_max_players`. A safety net also fires every tick to fill any open slot immediately.
+Both timers only fire when `activeCount() < effective_max_players`. A safety net also fires every tick to fill any open slot immediately with the highest-priority waiting player (Staff → Priority Rejoin → VIP → Normal).
 
-When admitted, the player's `placeNewPlayer()` is called for real (bypassing the mixin guard via a `ThreadLocal<Boolean> ADMITTING` flag), the queue screen closes, and they join the game world.
+#### Proportional Mode (`proportional_mode = true`)
+
+A single admission timer runs (using `normal_admit_interval_ticks`), and players are admitted in a configurable ratio cycle:
+
+```
+Admission order per timer tick:
+  1. Staff              (always first, no quota)
+  2. Priority Rejoin    (WAS_PLAYING reconnects)
+  3. Anti-Imbalance     (catch-up for skipped normals — see below)
+  4. Proportional cycle (VIP:N ratio, alternating)
+```
+
+The proportional cycle maintains a phase (VIP or Normal) and a counter:
+- **VIP phase**: admits up to `proportional_vip_count` VIPs, then switches to Normal phase
+- **Normal phase**: admits up to `proportional_normal_count` normals, then switches back to VIP phase
+- If a queue is empty, the phase switches immediately to avoid wasting admission opportunities
+- The safety net (slot refill on player disconnect) also follows the proportional phase and properly updates the phase counter, ensuring the ratio is maintained even during rapid player turnover
+
+**Anti-Imbalance Protection:** When the proportional cycle reaches the Normal phase but normal slots are full (due to `vip_exclusive_slots`), and there are both VIPs and normals waiting:
+1. The skip is counted: `skippedNormalCount + 1`
+2. The phase immediately switches back to VIP to keep admissions flowing
+3. When a normal slot later becomes available, the system enters **anti-imbalance mode**: admissions are made by real join order (oldest first, across both VIP and Normal queues) instead of the VIP/Normal ratio
+4. If the admitted player is a **normal**: `skippedNormalCount - 1` (debt repaid)
+5. If the admitted player is a **VIP**: count unchanged (VIPs are not blocked, but only normals reduce the debt)
+6. When `skippedNormalCount` reaches 0, the normal proportional cycle resumes
+
+This ensures that VIPs never completely starve normals — every skipped normal admission is eventually repaid.
+
+When admitted, the player's `placeNewPlayer()` is called for real (bypassing the mixin guard via a `ThreadLocal<Boolean> ADMITTING` flag), the queue screen closes, and they join the game world. Clients only see a unified "X players ahead" count — all internal queue separation and proportional logic is invisible to players.
 
 ### Disconnect & Timeout Protection
 
@@ -132,6 +166,9 @@ All values are under the `[queue]` section.
 | `rejoin_grace_ticks` | int | `6000` | 0–1728000 | Time window after disconnecting during which a rejoining player keeps their queue position. 0 = disabled. Default: 6000 ticks (5 minutes). |
 | `staff_bypass_queue` | bool | `false` | — | Staff behavior when the server is full. `false` = staff enter the queue at the front (priority insert). `true` = staff skip the queue entirely and join directly. **When `true`, ensure `effective_max_players` is lower than `server.properties max-players`** to reserve slots for staff. |
 | `vip_exclusive_slots` | int | `0` | 0–1024 | Number of slots reserved exclusively for VIP users. When > 0, non-VIP players are capped at `effective_max_players - vip_exclusive_slots`. The remaining slots can only be filled by VIP (and staff, when `staff_bypass_queue=false`). Example: `effective_max_players=35`, `vip_exclusive_slots=5` → non-VIP cap is 30. If misconfigured higher than `effective_max_players`, the value is clamped automatically. |
+| `proportional_mode` | bool | `false` | — | Enable proportional admission mode. When `true`, VIP and normal players are admitted in a configurable ratio (e.g., 3 VIPs then 1 normal, alternating). Staff are always admitted first regardless. When `false`, the legacy dual-timer mode is used (VIPs and normals each have their own independent admission interval). |
+| `proportional_vip_count` | int | `2` | 1–100 | Number of VIP players to admit per proportional cycle. Only used when `proportional_mode = true`. |
+| `proportional_normal_count` | int | `1` | 1–100 | Number of normal players to admit per proportional cycle. Only used when `proportional_mode = true`. |
 
 ### `smartqueue-staff.toml`
 
@@ -171,7 +208,7 @@ All administrative commands require **permission level 2** (operator). `/smartqu
 | `/smartqueue pause` | Pause admission (players stay queued, no new admits) |
 | `/smartqueue resume` | Resume admission (resets timers, continues admitting) |
 | `/smartqueue reload` | Confirm config reload |
-| `/smartqueue status` | Show queue status: active players, max capacity, VIP exclusive slot usage (when configured), total queued, and queued players split into VIP-priority and normal sections. Available to all players. |
+| `/smartqueue status` | Show queue status: active players, max capacity, admission mode and ratio (when proportional), VIP exclusive slot usage (when configured), total queued, and players split into four queue sections (Staff / Priority Rejoin / VIP / Normal). The next player to be admitted is highlighted in green. In proportional mode, the admission balance state (Balanced or Anti-Imbalance) is shown. Available to all players. |
 
 ### Staff Management
 
@@ -191,15 +228,26 @@ All administrative commands require **permission level 2** (operator). `/smartqu
 
 ## Queue Priority System
 
-When a player joins the queue, their insertion position is determined by this priority hierarchy (highest to lowest):
+SmartQueue maintains four independent queues. The admission order is strictly:
 
-```
-1. Rejoin (WAS_QUEUING)  →  original saved position
-2. Rejoin (WAS_PLAYING)  →  after last Staff/VIP entry
-3. Staff                 →  after last Staff entry
-4. VIP                   →  after last Staff/VIP entry
-5. Normal                →  end of queue
-```
+| Priority | Queue | Description |
+|---|---|---|
+| 1 | **Staff Queue** | Staff players (from `smartqueue-staff.toml`). Always admitted first, before all other queues. |
+| 2 | **Priority Rejoin Queue** | Players who were actively playing, disconnected, and then reconnected to a full server (`WAS_PLAYING` rejoin). Admitted in FIFO order (first to reconnect gets in first). |
+| 3 | **VIP Queue** | VIP players (from `smartqueue-vip.toml`). In proportional mode, admitted according to the VIP:Normal ratio. In legacy mode, admitted at the faster VIP interval. |
+| 4 | **Normal Queue** | All other players. In proportional mode, admitted according to the ratio. In legacy mode, admitted at the slower normal interval. |
+
+### Queue Placement
+
+When a player is queued:
+
+| Scenario | Target Queue | Position |
+|---|---|---|
+| Staff player | Staff Queue | Front (position 0) |
+| WAS_PLAYING rejoin (non-staff) | Priority Rejoin Queue | End (FIFO) |
+| WAS_QUEUING rejoin | Same queue as before | Saved position |
+| VIP player | VIP Queue | End |
+| Normal player | Normal Queue | End |
 
 - **Staff** and **VIP** are mutually exclusive — if a player is both, Staff takes precedence.
 - By default (`staff_bypass_queue = false`), Staff and VIP players are still required to queue when the server is full; they simply get priority placement and faster admission, not a bypass.
@@ -251,7 +299,7 @@ Players who disconnect while in the queue (or while playing, then the server fil
 | Type | Trigger | Recovery |
 |---|---|---|
 | `WAS_QUEUING` | Player disconnects while waiting in the queue | Restored at original position (capped at current queue size) |
-| `WAS_PLAYING` | Player was actively playing, then disconnected and tries to rejoin a full server | Placed after Staff/VIP entries (priority over normals) |
+| `WAS_PLAYING` | Player was actively playing, then disconnected and tries to rejoin a full server | Placed in Priority Rejoin Queue (FIFO order, admitted after Staff but before all VIP/Normal queues) |
 
 ### Configuration
 
@@ -309,7 +357,8 @@ When a player connects and the server is full, they see:
 │    │                                                     │
 │  QueueManager.onServerTick()                             │
 │    ├── Cleanup disconnected connections                  │
-│    ├── Admit players on VIP/Normal intervals             │
+│    ├── Admit players (legacy dual-timer or proportional) │
+│    ├── Anti-imbalance catch-up (proportional mode)       │
 │    └── Broadcast QueueStatusPayload every 100 ticks      │
 │                                                          │
 │  ConfigTickHeadMixin                                     │
@@ -426,7 +475,7 @@ This should not happen with SmartQueue installed. The mod removes the Netty `Rea
 - Ensure the mod is installed on **both the server and the client**
 - Check that `enabled = true` in `smartqueue-server.toml`
 - Verify that `effective_max_players` is lower than the actual player count
-- Staff players (listed in `smartqueue-staff.toml`) always bypass the queue screen
+- Staff players (listed in `smartqueue-staff.toml`) bypass the queue screen when `staff_bypass_queue = true`
 
 ### Staff/VIP list changes are lost after server restart
 

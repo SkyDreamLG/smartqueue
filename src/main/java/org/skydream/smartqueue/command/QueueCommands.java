@@ -118,9 +118,10 @@ public final class QueueCommands {
 
     private static int status(CommandContext<CommandSourceStack> ctx) {
         QueueManager qm = QueueManager.getInstance();
-        List<QueueEntry> queue = qm.getQueueList();
+        QueueManager.QueueSnapshot snap = qm.getSnapshot();
         boolean enabled = Config.ENABLED.get();
         boolean paused = qm.isPaused();
+        boolean proportional = Config.PROPORTIONAL_MODE.get();
         int active = qm.activeCount();
         int queued = qm.queueSize();
         int effectiveMax = Config.EFFECTIVE_MAX_PLAYERS.get();
@@ -133,6 +134,22 @@ public final class QueueCommands {
         ctx.getSource().sendSuccess(
                 () -> Component.translatable("smartqueue.command.status.active",
                         active, effectiveMax), false);
+
+        if (proportional) {
+            int vipRatio = Config.PROPORTIONAL_VIP_COUNT.get();
+            int normalRatio = Config.PROPORTIONAL_NORMAL_COUNT.get();
+            ctx.getSource().sendSuccess(
+                    () -> Component.translatable("smartqueue.command.status.proportional",
+                            vipRatio, normalRatio), false);
+            if (snap.antiImbalance()) {
+                ctx.getSource().sendSuccess(
+                        () -> Component.translatable("smartqueue.command.status.anti_imbalance",
+                                snap.skippedNormalCount()), false);
+            } else {
+                ctx.getSource().sendSuccess(
+                        () -> Component.translatable("smartqueue.command.status.balanced"), false);
+            }
+        }
 
         if (vipSlots > 0) {
             int vipOnline = qm.countVipEligibleOnline();
@@ -151,45 +168,58 @@ public final class QueueCommands {
                 () -> Component.translatable("smartqueue.command.status.queue_size",
                         queued, Config.MAX_QUEUE_SIZE.get()), false);
 
-        if (!queue.isEmpty()) {
-            // Split into VIP-priority (staff/vip) and normal
-            List<QueueEntry> vipQueue = new java.util.ArrayList<>();
-            List<QueueEntry> normalQueue = new java.util.ArrayList<>();
-            for (QueueEntry e : queue) {
-                if (e.staff || e.vip) vipQueue.add(e);
-                else normalQueue.add(e);
-            }
+        if (queued == 0) return 1;
 
-            if (!vipQueue.isEmpty()) {
-                ctx.getSource().sendSuccess(
-                        () -> Component.translatable("smartqueue.command.status.queue_header_vip",
-                                vipQueue.size()), false);
-                for (int i = 0; i < vipQueue.size(); i++) {
-                    QueueEntry entry = vipQueue.get(i);
-                    String typeKey = entry.staff ? "smartqueue.command.status.staff"
-                            : "smartqueue.command.status.vip";
-                    final int pos = i + 1;
-                    ctx.getSource().sendSuccess(
-                            () -> Component.translatable("smartqueue.command.status.queue_entry",
-                                    pos, Component.translatable(typeKey), entry.getName()), false);
-                }
-            }
+        QueueEntry next = snap.nextAdmit();
 
-            if (!normalQueue.isEmpty()) {
-                ctx.getSource().sendSuccess(
-                        () -> Component.translatable("smartqueue.command.status.queue_header_normal",
-                                normalQueue.size()), false);
-                for (int i = 0; i < normalQueue.size(); i++) {
-                    QueueEntry entry = normalQueue.get(i);
-                    final int pos = i + 1;
-                    ctx.getSource().sendSuccess(
-                            () -> Component.translatable("smartqueue.command.status.queue_entry",
-                                    pos, Component.translatable("smartqueue.command.status.normal"),
-                                    entry.getName()), false);
-                }
-            }
+        // Staff queue
+        if (!snap.staff().isEmpty()) {
+            ctx.getSource().sendSuccess(
+                    () -> Component.translatable("smartqueue.command.status.queue_header_staff",
+                            snap.staff().size()), false);
+            renderQueueEntries(ctx, snap.staff(), next, "smartqueue.command.status.staff");
         }
+
+        // Priority rejoin queue
+        if (!snap.priority().isEmpty()) {
+            ctx.getSource().sendSuccess(
+                    () -> Component.translatable("smartqueue.command.status.queue_header_priority",
+                            snap.priority().size()), false);
+            renderQueueEntries(ctx, snap.priority(), next,
+                    "smartqueue.command.status.priority_rejoin");
+        }
+
+        // VIP queue
+        if (!snap.vip().isEmpty()) {
+            ctx.getSource().sendSuccess(
+                    () -> Component.translatable("smartqueue.command.status.queue_header_vip",
+                            snap.vip().size()), false);
+            renderQueueEntries(ctx, snap.vip(), next, "smartqueue.command.status.vip");
+        }
+
+        // Normal queue
+        if (!snap.normal().isEmpty()) {
+            ctx.getSource().sendSuccess(
+                    () -> Component.translatable("smartqueue.command.status.queue_header_normal",
+                            snap.normal().size()), false);
+            renderQueueEntries(ctx, snap.normal(), next, "smartqueue.command.status.normal");
+        }
+
         return 1;
+    }
+
+    private static void renderQueueEntries(CommandContext<CommandSourceStack> ctx,
+                                           List<QueueEntry> entries, QueueEntry next, String typeKey) {
+        for (int i = 0; i < entries.size(); i++) {
+            QueueEntry entry = entries.get(i);
+            final int pos = i + 1;
+            boolean isNext = (next != null && entry == next);
+            ctx.getSource().sendSuccess(
+                    () -> Component.translatable(
+                            isNext ? "smartqueue.command.status.queue_entry_next"
+                                    : "smartqueue.command.status.queue_entry",
+                            pos, Component.translatable(typeKey), entry.getName()), false);
+        }
     }
 
     private static int addStaff(CommandContext<CommandSourceStack> ctx, String name) {

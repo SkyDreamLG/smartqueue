@@ -24,7 +24,9 @@ SmartQueue 用一套可配置的、带优先级的排队系统替代了原版 Mi
 - **可配置的玩家上限** — 将 `effective_max_players` 设得比 `server.properties max-players` 更低，预留管理员通道或强制启用排队
 - **VIP 专属槽位** — 将部分服务器名额预留给 VIP 玩家，确保赞助玩家始终能够进入
 - **实时排队界面** — 显示当前位置、排队总人数、前方等待人数、预计等待时间
-- **优先级分级** — Staff（最高优先级）、VIP、普通玩家，各等级使用独立的入场间隔
+- **优先级分级** — Staff（最高优先级）、VIP、普通玩家，支持可配置的放行模式
+- **比例放行模式** — 可选的比例放行（如"3个VIP后放2个普通"），配合防失衡保护，防止普通玩家被无限插队
+- **四个独立队列** — Staff、优先重连、VIP、普通四个队列，严格按优先级顺序放行
 - **断线重连恢复位置** — 在宽限时间内断开重连，可以恢复原来的排队位置
 - **自动补位** — 每个 tick 检查是否有空位，确保有空位时立即补入排队玩家
 - **暂停/恢复** — 维护期间可冻结排队，不踢出任何玩家
@@ -72,13 +74,45 @@ SmartQueue **需要同时安装在服务端和客户端**。服务端处理排�
 
 ### 入场机制
 
+SmartQueue 支持两种放行模式，通过 `proportional_mode` 配置项切换。
+
+#### 传统模式（`proportional_mode = false`，默认）
+
 每个服务端 tick，两个独立的入场计时器并行运行：
 - **VIP 计时器**（默认：每 40 tick / 2 秒）— 从队列中放行第一个 Staff 或 VIP 玩家
 - **普通计时器**（默认：每 100 tick / 5 秒）— 从队列中放行第一个普通玩家
 
-两个计时器仅在 `activeCount() < effective_max_players` 时触发。此外还有每 tick 运行的兜底检查，确保有空位时立即补入。
+两个计时器仅在 `activeCount() < effective_max_players` 时触发。此外还有每 tick 运行的兜底检查（安全网），按优先级顺序立即填补空位：Staff → 优先重连 → VIP → 普通。
 
-入场时，模组设置 `ADMITTING` 标志（通过 `ThreadLocal` 传递），然后调用 `placeNewPlayer()` 真正将玩家放入世界。由于 `ADMITTING` 标志的存在，Mixin 守卫不会再次拦截。入场后向客户端发送 `admitted=true` 的状态包，排队界面自动关闭，玩家进入游戏世界。
+#### 比例放行模式（`proportional_mode = true`）
+
+使用单一计时器（走 `normal_admit_interval_ticks` 间隔），按可配置的比例交替放行：
+
+```
+每次计时器触发的放行顺序：
+  1. Staff                （始终最先，不受配额限制）
+  2. 优先重连              （游戏中断线重连的玩家，FIFO 顺序）
+  3. 防失衡补放行          （偿还被跳过的普通名额 — 见下文）
+  4. 比例交替              （VIP:普通 比例循环）
+```
+
+比例循环维护当前阶段（VIP 阶段或普通阶段）和计数器：
+- **VIP 阶段**：放行最多 `proportional_vip_count` 个 VIP，达到配额后切换到普通阶段
+- **普通阶段**：放行最多 `proportional_normal_count` 个普通玩家，达到配额后切换回 VIP 阶段
+- 如果当前阶段的队列为空，立即切换阶段，不浪费放行机会
+- 安全网（玩家退出时的即时补位）也遵循比例阶段并正确更新计数器，保证快节奏进出时比例不被打破
+
+**防失衡保护：** 比例循环到达普通阶段时，如果普通槽位已满（受 `vip_exclusive_slots` 限制），且 VIP 和普通队列都有人在等：
+1. 记录跳过：`skippedNormalCount + 1`
+2. 立即切回 VIP 阶段继续放行，不让空位闲置
+3. 当普通槽位被释放后，系统进入**防失衡模式**：暂停比例交替，改为按真实加入顺序（`joinOrder`，跨 VIP 和普通队列统一排序，谁先排谁先进）放行
+4. 放行的是**普通玩家** → `skippedNormalCount - 1`（偿还债务）
+5. 放行的是**VIP 玩家** → 计数不变（VIP 不被卡住，但不减少债务）
+6. 当 `skippedNormalCount` 归零 → 恢复正常比例放行
+
+这确保了 VIP 永远不会完全饿死普通玩家 — 每次被跳过的普通放行机会都最终会被偿还。
+
+入场时，模组设置 `ADMITTING` 标志（通过 `ThreadLocal` 传递），然后调用 `placeNewPlayer()` 真正将玩家放入世界。由于 `ADMITTING` 标志的存在，Mixin 守卫不会再次拦截。入场后向客户端发送 `admitted=true` 的状态包，排队界面自动关闭，玩家进入游戏世界。客户端只看到统一的"前方还有 X 位玩家"计数 — 所有的内部分队列和比例逻辑对玩家不可见。
 
 ### 断线检测与超时保护
 
@@ -132,6 +166,9 @@ SmartQueue **需要同时安装在服务端和客户端**。服务端处理排�
 | `rejoin_grace_ticks` | int | `6000` | 0–1728000 | 断线后重连保留排队位置的宽限时间。0 = 禁用。默认 6000 tick（5 分钟）。 |
 | `staff_bypass_queue` | bool | `false` | — | Staff 在服务器满时的行为。`false`（默认）= Staff 进入队列但排到最前面（插队）。`true` = Staff 完全跳过排队直接进入。**设为 `true` 时，请确保 `effective_max_players` 低于 `server.properties max-players`**，为 staff 预留直接进入的容量。 |
 | `vip_exclusive_slots` | int | `0` | 0–1024 | 为 VIP 玩家保留的专属槽位数量。> 0 时，普通玩家上限 = `effective_max_players - vip_exclusive_slots`。剩余槽位仅供 VIP（以及 `staff_bypass_queue=false` 时的 staff）使用。示例：`effective_max_players=35`, `vip_exclusive_slots=5` → 普通玩家上限为 30 人。若误设为大于 `effective_max_players` 的值，会自动钳制为有效上限。 |
+| `proportional_mode` | bool | `false` | — | 启用比例放行模式。设为 `true` 时，VIP 和普通玩家按可配置的比例交替放行（如每放 3 个 VIP 后放 1 个普通，循环往复）。Staff 不受比例限制，始终最先放行。设为 `false` 时使用传统的双计时器模式（VIP 和普通各自有独立的放行间隔）。 |
+| `proportional_vip_count` | int | `2` | 1–100 | 每个比例周期放行的 VIP 数量。仅在 `proportional_mode = true` 时生效。 |
+| `proportional_normal_count` | int | `1` | 1–100 | 每个比例周期放行的普通玩家数量。仅在 `proportional_mode = true` 时生效。 |
 
 ### `smartqueue-staff.toml`
 
@@ -171,7 +208,7 @@ vip = ["Supporter1", "FriendName"]
 | `/smartqueue pause` | 暂停入场（玩家留在队列中，不新放行） |
 | `/smartqueue resume` | 恢复入场（重置计时器，继续放行） |
 | `/smartqueue reload` | 确认配置已重载 |
-| `/smartqueue status` | 查看排队状态：活跃玩家数、最大容量、VIP 专属槽位使用情况（如已配置）、排队总人数、排队列表按 VIP 优先/普通分段显示。所有玩家均可使用。 |
+| `/smartqueue status` | 查看排队状态：活跃玩家数、最大容量、放行模式及比例（比例模式下）、VIP 专属槽位使用情况（如已配置）、排队总人数、分四个队列显示（Staff / 优先重连 / VIP / 普通）。下一个待放行的玩家以绿色高亮标记。比例模式下显示均衡状态（均衡放行 或 防失衡）。所有玩家均可使用。 |
 
 ### Staff 管理
 
@@ -191,15 +228,26 @@ vip = ["Supporter1", "FriendName"]
 
 ## 优先级规则
 
-玩家进入队列时的插入位置由以下优先级决定（从高到低）：
+SmartQueue 维护四个独立队列。放行顺序严格按以下优先级：
 
-```
-1. 重连（WAS_QUEUING） →  恢复到原来保存的位置
-2. 重连（WAS_PLAYING） →  排在最后一个 Staff/VIP 之后
-3. Staff                →  排在最后一个 Staff 之后
-4. VIP                  →  排在最后一个 Staff/VIP 之后
-5. 普通玩家              →  队列末尾
-```
+| 优先级 | 队列 | 说明 |
+|---|---|---|
+| 1 | **Staff 队列** | Staff 玩家（来自 `smartqueue-staff.toml`）。始终最先放行，排在其他所有队列之前。 |
+| 2 | **优先重连队列** | 正在游戏中断线后重连的玩家（`WAS_PLAYING` 重连）。按 FIFO 顺序放行（先重连的先进入）。 |
+| 3 | **VIP 队列** | VIP 玩家（来自 `smartqueue-vip.toml`）。比例模式下按 VIP:普通 比例放行；传统模式下按较快的 VIP 间隔放行。 |
+| 4 | **普通队列** | 其他所有玩家。比例模式下按比例放行；传统模式下按较慢的普通间隔放行。 |
+
+### 队列分配规则
+
+玩家进入排队时的分配：
+
+| 场景 | 目标队列 | 位置 |
+|---|---|---|
+| Staff 玩家 | Staff 队列 | 最前面（位置 0） |
+| WAS_PLAYING 重连（非 staff） | 优先重连队列 | 末尾（FIFO） |
+| WAS_QUEUING 重连 | 与之前相同的队列 | 恢复到保存的位置 |
+| VIP 玩家 | VIP 队列 | 末尾 |
+| 普通玩家 | 普通队列 | 末尾 |
 
 - **Staff** 和 **VIP** 互斥 — 如果玩家同时在两个名单中，Staff 优先
 - 默认情况下（`staff_bypass_queue = false`），Staff 和 VIP 玩家在服务器满时**同样需要排队**，只是排在前面、入场更快，并非跳过排队直接进入
@@ -251,7 +299,7 @@ staff_bypass_queue = true
 | 类型 | 触发条件 | 恢复方式 |
 |---|---|---|
 | `WAS_QUEUING` | 玩家在排队中断开连接 | 恢复到原来的排队位置（上限为当前队列长度） |
-| `WAS_PLAYING` | 玩家正在游戏中，断开后重连时服务器已满 | 排在 Staff/VIP 之后（优先于普通玩家） |
+| `WAS_PLAYING` | 玩家正在游戏中，断开后重连时服务器已满 | 放入优先重连队列（FIFO 顺序，排在 Staff 之后、所有 VIP/普通队列之前） |
 
 ### 配置
 
@@ -307,7 +355,8 @@ staff_bypass_queue = true
 │    │                                                      │
 │  QueueManager.onServerTick()                             │
 │    ├── 清理断开连接                                        │
-│    ├── 按 VIP/普通间隔放行玩家                            │
+│    ├── 放行玩家（传统双计时器 或 比例模式）               │
+│    ├── 防失衡补放行（比例模式）                            │
 │    └── 每 100 tick 广播 QueueStatusPayload                │
 │                                                          │
 │  ConfigTickHeadMixin                                     │
@@ -424,7 +473,7 @@ cd smartqueue
 - 确认模组已**同时在服务端和客户端**安装
 - 检查 `smartqueue-server.toml` 中 `enabled = true`
 - 确认 `effective_max_players` 小于实际玩家数量
-- Staff 名单中的玩家会直接跳过排队（但当前版本中他们也需排队，仅排在前面）
+- Staff 名单中的玩家享有最高优先级（排在队列最前面；若 `staff_bypass_queue = true` 则直接跳过排队）
 
 ### 服务器重启后 Staff/VIP 名单丢失
 

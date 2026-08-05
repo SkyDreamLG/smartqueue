@@ -26,6 +26,9 @@ public final class Config {
     public static final ModConfigSpec.IntValue REJOIN_GRACE_TICKS;
     public static final ModConfigSpec.BooleanValue STAFF_BYPASS_QUEUE;
     public static final ModConfigSpec.IntValue VIP_EXCLUSIVE_SLOTS;
+    public static final ModConfigSpec.BooleanValue PROPORTIONAL_MODE;
+    public static final ModConfigSpec.IntValue PROPORTIONAL_VIP_COUNT;
+    public static final ModConfigSpec.IntValue PROPORTIONAL_NORMAL_COUNT;
 
     static {
         MAIN_BUILDER.comment("SmartQueue Main Configuration",
@@ -87,6 +90,26 @@ public final class Config {
                         "Default: 0 (disabled — all slots are available to everyone).")
                 .translation("smartqueue.config.vip_exclusive_slots")
                 .defineInRange("vip_exclusive_slots", 0, 0, 1024);
+
+        PROPORTIONAL_MODE = MAIN_BUILDER
+                .comment("Enable proportional admission mode.",
+                        "When true, VIP and normal players are admitted in a configurable ratio",
+                        "(e.g., admit 3 VIPs then 1 normal, alternating).",
+                        "Staff are always admitted first regardless of this setting.")
+                .translation("smartqueue.config.proportional_mode")
+                .define("proportional_mode", false);
+
+        PROPORTIONAL_VIP_COUNT = MAIN_BUILDER
+                .comment("Number of VIP players to admit per proportional cycle.",
+                        "Only used when proportional_mode is true.")
+                .translation("smartqueue.config.proportional_vip_count")
+                .defineInRange("proportional_vip_count", 2, 1, 100);
+
+        PROPORTIONAL_NORMAL_COUNT = MAIN_BUILDER
+                .comment("Number of normal players to admit per proportional cycle.",
+                        "Only used when proportional_mode is true.")
+                .translation("smartqueue.config.proportional_normal_count")
+                .defineInRange("proportional_normal_count", 1, 1, 100);
         MAIN_BUILDER.pop();
 
         MAIN_SPEC = MAIN_BUILDER.build();
