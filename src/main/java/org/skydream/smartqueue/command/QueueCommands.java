@@ -33,9 +33,10 @@ public final class QueueCommands {
                                 .executes(QueueCommands::toggle))
                         .executes(ctx -> {
                             boolean enabled = Config.ENABLED.get();
+                            Component state = Component.translatable(
+                                    enabled ? "smartqueue.command.state.on" : "smartqueue.command.state.off");
                             ctx.getSource().sendSuccess(
-                                    () -> Component.translatable("smartqueue.command.toggle",
-                                            enabled ? "ON" : "OFF"), true);
+                                    () -> Component.translatable("smartqueue.command.toggle", state), true);
                             return 1;
                         })
                 )
@@ -104,8 +105,10 @@ public final class QueueCommands {
         String state = StringArgumentType.getString(ctx, "state");
         boolean enable = "on".equalsIgnoreCase(state);
         QueueManager.getInstance().setEnabled(enable);
+        Component stateText = Component.translatable(
+                enable ? "smartqueue.command.state.on" : "smartqueue.command.state.off");
         ctx.getSource().sendSuccess(
-                () -> Component.translatable("smartqueue.command.toggle", enable ? "ON" : "OFF"), true);
+                () -> Component.translatable("smartqueue.command.toggle", stateText), true);
         return 1;
     }
 
@@ -117,23 +120,29 @@ public final class QueueCommands {
         int active = qm.activeCount();
         int queued = qm.queueSize();
 
-        ctx.getSource().sendSuccess(() -> Component.literal(
-                "§6=== SmartQueue Status ==="), false);
-        ctx.getSource().sendSuccess(() -> Component.literal(
-                "§eEnabled: §f" + enabled + "  §ePaused: §f" + paused), false);
-        ctx.getSource().sendSuccess(() -> Component.literal(
-                "§eActive Players: §f" + active + " §e/ §f" + Config.EFFECTIVE_MAX_PLAYERS.get()), false);
-        ctx.getSource().sendSuccess(() -> Component.literal(
-                "§eQueue Size: §f" + queued + " §e/ §f" + Config.MAX_QUEUE_SIZE.get()), false);
+        ctx.getSource().sendSuccess(
+                () -> Component.translatable("smartqueue.command.status.header"), false);
+        ctx.getSource().sendSuccess(
+                () -> Component.translatable("smartqueue.command.status.enabled", enabled, paused), false);
+        ctx.getSource().sendSuccess(
+                () -> Component.translatable("smartqueue.command.status.active",
+                        active, Config.EFFECTIVE_MAX_PLAYERS.get()), false);
+        ctx.getSource().sendSuccess(
+                () -> Component.translatable("smartqueue.command.status.queue_size",
+                        queued, Config.MAX_QUEUE_SIZE.get()), false);
 
         if (!queue.isEmpty()) {
-            ctx.getSource().sendSuccess(() -> Component.literal("§eQueue:"), false);
+            ctx.getSource().sendSuccess(
+                    () -> Component.translatable("smartqueue.command.status.queue_header"), false);
             for (int i = 0; i < queue.size(); i++) {
                 QueueEntry entry = queue.get(i);
-                String type = entry.staff ? "§c[STAFF]" : entry.vip ? "§d[VIP]" : "§7[NORMAL]";
+                String typeKey = entry.staff ? "smartqueue.command.status.staff"
+                        : entry.vip ? "smartqueue.command.status.vip"
+                        : "smartqueue.command.status.normal";
                 final int pos = i + 1;
-                ctx.getSource().sendSuccess(() -> Component.literal(
-                        "  §f" + pos + ". " + type + " §f" + entry.getName()), false);
+                ctx.getSource().sendSuccess(
+                        () -> Component.translatable("smartqueue.command.status.queue_entry",
+                                pos, Component.translatable(typeKey), entry.getName()), false);
             }
         }
         return 1;

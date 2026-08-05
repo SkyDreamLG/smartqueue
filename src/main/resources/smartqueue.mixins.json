@@ -5,9 +5,13 @@
   "compatibilityLevel": "JAVA_21",
   "mixins": [
     "PlayerListMixin",
-    "ServerConfigDisconnectMixin"
+    "ServerConfigDisconnectMixin",
+    "ConfigTickMixin",
+    "ConfigTickHeadMixin",
+    "ConnectionAccessor"
   ],
   "client": [
+    "MinecraftAccessor"
   ],
   "injectors": {
     "defaultRequire": 1

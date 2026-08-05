@@ -27,8 +27,8 @@ neoForge {
         minecraftVersion = project.parchment_minecraft_version
     }
 
-    // This line is optional. Access Transformers are automatically detected
-    // accessTransformers.add('src/main/resources/META-INF/accesstransformer.cfg')
+    // Access Transformers are automatically detected from META-INF/accesstransformer.cfg
+    // No explicit registration needed with moddev 2.x
 
     // Default run configurations.
     // These can be tweaked, removed, or duplicated as needed.

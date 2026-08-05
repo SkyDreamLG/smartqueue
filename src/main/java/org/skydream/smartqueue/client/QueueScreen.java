@@ -1,37 +1,53 @@
 package org.skydream.smartqueue.client;
 
+import com.mojang.logging.LogUtils;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
-import net.neoforged.neoforge.network.PacketDistributor;
-import org.skydream.smartqueue.network.QueuePayloads;
+import org.slf4j.Logger;
 
 public class QueueScreen extends Screen {
+
+    private static final Logger LOGGER = LogUtils.getLogger();
 
     private Button leaveButton;
 
     public QueueScreen() {
         super(Component.translatable(
-                ClientQueueState.isPaused() ? "smartqueue.screen.title_paused" : "smartqueue.screen.title"));
+                ClientQueueState.isRejected() ? "smartqueue.screen.title_rejected"
+                        : ClientQueueState.isPaused() ? "smartqueue.screen.title_paused"
+                        : "smartqueue.screen.title"));
     }
 
     @Override
     protected void init() {
+        LOGGER.debug("QueueScreen.init() rejected={}", ClientQueueState.isRejected());
         super.init();
         int centerX = this.width / 2;
         int buttonY = this.height / 2 + 60;
 
-        leaveButton = Button.builder(
-                        Component.translatable("smartqueue.screen.leave"),
-                        btn -> {
-                            PacketDistributor.sendToServer(new QueuePayloads.QueueActionPayload(
-                                    QueuePayloads.QueueAction.LEAVE_QUEUE));
-                            ClientQueueState.onLeave();
-                        })
-                .pos(centerX - 50, buttonY)
-                .size(100, 20)
-                .build();
+        if (ClientQueueState.isRejected()) {
+            leaveButton = Button.builder(
+                            Component.translatable("smartqueue.screen.back"),
+                            btn -> {
+                                LOGGER.debug("QueueScreen: back button clicked (rejected)");
+                                ClientQueueState.onRejectedBack();
+                            })
+                    .pos(centerX - 50, buttonY)
+                    .size(100, 20)
+                    .build();
+        } else {
+            leaveButton = Button.builder(
+                            Component.translatable("smartqueue.screen.leave"),
+                            btn -> {
+                                LOGGER.debug("QueueScreen: leave button clicked");
+                                ClientQueueState.onLeave();
+                            })
+                    .pos(centerX - 50, buttonY)
+                    .size(100, 20)
+                    .build();
+        }
         addRenderableWidget(leaveButton);
     }
 
@@ -41,6 +57,23 @@ public class QueueScreen extends Screen {
 
         int centerX = this.width / 2;
         int y = this.height / 2 - 70;
+
+        // Rejected screen
+        if (ClientQueueState.isRejected()) {
+            Component title = Component.translatable("smartqueue.screen.title_rejected");
+            graphics.drawCenteredString(font, title, centerX, y, 0xFF5555);
+            y += 36;
+
+            Component msg = Component.translatable("smartqueue.screen.rejected_msg");
+            graphics.drawCenteredString(font, msg, centerX, y, 0xCCCCCC);
+            y += 20;
+
+            Component hint = Component.translatable("smartqueue.screen.rejected_hint");
+            graphics.drawCenteredString(font, hint, centerX, y, 0x888888);
+
+            super.render(graphics, mouseX, mouseY, partialTick);
+            return;
+        }
 
         // Title
         Component displayTitle = Component.translatable(
@@ -92,6 +125,14 @@ public class QueueScreen extends Screen {
             y += 16;
         }
 
+        // Connection lost warning
+        if (ClientQueueState.isConnectionLost()) {
+            y += 10;
+            Component lostText = Component.translatable("smartqueue.screen.connection_lost");
+            graphics.drawCenteredString(font, lostText, centerX, y, 0xFFAA00);
+            y += 16;
+        }
+
         y += 10;
 
         // Don't close hint
@@ -103,7 +144,6 @@ public class QueueScreen extends Screen {
 
     @Override
     public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        // Semi-transparent dark background
         graphics.fill(0, 0, this.width, this.height, 0xC0101010);
     }
 
@@ -114,8 +154,11 @@ public class QueueScreen extends Screen {
 
     @Override
     public void onClose() {
-        // Prevent closing — re-open if still queued
-        if (ClientQueueState.isQueued()) {
+        LOGGER.debug("QueueScreen.onClose() isQueued={}, isRejected={}",
+                ClientQueueState.isQueued(), ClientQueueState.isRejected());
+        if (ClientQueueState.isRejected()) {
+            ClientQueueState.onRejectedBack();
+        } else if (ClientQueueState.isQueued()) {
             ClientQueueState.ensureScreen();
         }
     }

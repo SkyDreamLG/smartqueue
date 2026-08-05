@@ -10,8 +10,7 @@ public class QueueEntry {
     public final Connection connection;
     public final CommonListenerCookie cookie;
     public final GameProfile profile;
-    public final boolean vip;
-    public final boolean staff;
+    public final boolean vip, staff;
     public final long queuedAtTick;
     public QueueEntryState state;
 
@@ -27,7 +26,5 @@ public class QueueEntry {
         this.state = QueueEntryState.WAITING;
     }
 
-    public String getName() {
-        return profile.getName();
-    }
+    public String getName() { return profile.getName(); }
 }

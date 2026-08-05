@@ -11,21 +11,33 @@ public final class QueuePayloads {
 
     private QueuePayloads() {}
 
-    public record QueueStatusPayload(int position, int total, int ahead, boolean admitted, boolean paused, int etaSeconds)
+    public record QueueStatusPayload(int position, int total, int ahead, boolean admitted, boolean paused,
+                                     int etaSeconds, boolean rejected)
             implements CustomPacketPayload {
 
         public static final Type<QueueStatusPayload> TYPE =
                 new Type<>(ResourceLocation.fromNamespaceAndPath(Smartqueue.MODID, "queue_status"));
 
         public static final StreamCodec<FriendlyByteBuf, QueueStatusPayload> STREAM_CODEC =
-                StreamCodec.composite(
-                        ByteBufCodecs.VAR_INT, QueueStatusPayload::position,
-                        ByteBufCodecs.VAR_INT, QueueStatusPayload::total,
-                        ByteBufCodecs.VAR_INT, QueueStatusPayload::ahead,
-                        ByteBufCodecs.BOOL, QueueStatusPayload::admitted,
-                        ByteBufCodecs.BOOL, QueueStatusPayload::paused,
-                        ByteBufCodecs.VAR_INT, QueueStatusPayload::etaSeconds,
-                        QueueStatusPayload::new
+                StreamCodec.of(
+                        (buf, payload) -> {
+                            buf.writeVarInt(payload.position);
+                            buf.writeVarInt(payload.total);
+                            buf.writeVarInt(payload.ahead);
+                            buf.writeBoolean(payload.admitted);
+                            buf.writeBoolean(payload.paused);
+                            buf.writeVarInt(payload.etaSeconds);
+                            buf.writeBoolean(payload.rejected);
+                        },
+                        buf -> new QueueStatusPayload(
+                                buf.readVarInt(),
+                                buf.readVarInt(),
+                                buf.readVarInt(),
+                                buf.readBoolean(),
+                                buf.readBoolean(),
+                                buf.readVarInt(),
+                                buf.readBoolean()
+                        )
                 );
 
         @Override
