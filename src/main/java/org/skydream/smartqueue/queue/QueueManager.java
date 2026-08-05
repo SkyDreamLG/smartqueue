@@ -101,7 +101,7 @@ public final class QueueManager {
         if (isRejoin && rejoin.type == RejoinType.WAS_QUEUING) {
             int pos = Math.min(rejoin.savedPosition, queue.size());
             queue.add(pos, entry);
-        } else if (rejoin != null && rejoin.type == RejoinType.WAS_PLAYING) {
+        } else if (isRejoin && rejoin.type == RejoinType.WAS_PLAYING) {
             int idx = Math.max(lastOfType(true), lastOfType(false));
             queue.add(idx + 1, entry);
         } else if (staff) {
