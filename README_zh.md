@@ -11,6 +11,8 @@
 
 </div>
 
+**中文** | [English](./README.md)
+
 ---
 
 ## 概述
