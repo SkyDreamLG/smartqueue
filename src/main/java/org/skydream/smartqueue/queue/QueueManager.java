@@ -64,7 +64,22 @@ public final class QueueManager {
     public boolean shouldQueue(GameProfile profile) {
         if (!Config.ENABLED.get()) return false;
         if (Config.STAFF_BYPASS_QUEUE.get() && isStaff(profile)) return false;
-        return activeCount() >= Config.EFFECTIVE_MAX_PLAYERS.get();
+
+        int effectiveMax = Config.EFFECTIVE_MAX_PLAYERS.get();
+        int vipSlots = effectiveVipSlots();
+
+        if (vipSlots > 0) {
+            boolean vipEligible = isStaff(profile) || isVip(profile);
+            if (Config.STAFF_BYPASS_QUEUE.get()) vipEligible = isVip(profile);
+
+            if (!vipEligible) {
+                int nonVipLimit = effectiveMax - vipSlots;
+                int nonVipOnline = countNonVipOnline();
+                return nonVipOnline >= nonVipLimit;
+            }
+        }
+
+        return activeCount() >= effectiveMax;
     }
 
     public void enqueue(Connection connection, ServerPlayer player, CommonListenerCookie cookie) {
@@ -244,6 +259,12 @@ public final class QueueManager {
 
     private void admitNext(boolean vip) {
         if (activeCount() >= Config.EFFECTIVE_MAX_PLAYERS.get()) return;
+        int vipSlots = effectiveVipSlots();
+        if (!vip && vipSlots > 0) {
+            int nonVipLimit = Config.EFFECTIVE_MAX_PLAYERS.get() - vipSlots;
+            int nonVipOnline = countNonVipOnline();
+            if (nonVipOnline >= nonVipLimit) return;
+        }
         for (QueueEntry e : queue) {
             if (e.state != QueueEntryState.WAITING) continue;
             if (vip && (e.staff || e.vip)) { admit(e); return; }
@@ -307,6 +328,12 @@ public final class QueueManager {
     }
 
     private boolean admitFirstAvailable(boolean vip) {
+        int vipSlots = effectiveVipSlots();
+        if (!vip && vipSlots > 0) {
+            int nonVipLimit = Config.EFFECTIVE_MAX_PLAYERS.get() - vipSlots;
+            int nonVipOnline = countNonVipOnline();
+            if (nonVipOnline >= nonVipLimit) return false;
+        }
         for (QueueEntry e : queue) {
             if (e.state != QueueEntryState.WAITING) continue;
             if (vip && (e.staff || e.vip)) { admit(e); return true; }
@@ -366,6 +393,32 @@ public final class QueueManager {
     public boolean isVip(GameProfile p) {
         String n = p.getName();
         return Config.VIP_LIST.get().stream().anyMatch(s -> s.equalsIgnoreCase(n));
+    }
+
+    public int effectiveVipSlots() {
+        return Math.min(Config.VIP_EXCLUSIVE_SLOTS.get(), Config.EFFECTIVE_MAX_PLAYERS.get());
+    }
+
+    public int countVipEligibleOnline() {
+        if (server == null) return 0;
+        int count = 0;
+        boolean staffBypass = Config.STAFF_BYPASS_QUEUE.get();
+        for (ServerPlayer sp : server.getPlayerList().getPlayers()) {
+            GameProfile profile = sp.getGameProfile();
+            if (isVip(profile)) count++;
+            else if (!staffBypass && isStaff(profile)) count++;
+        }
+        return count;
+    }
+
+    public int countNonVipOnline() {
+        if (server == null) return 0;
+        int count = 0;
+        for (ServerPlayer sp : server.getPlayerList().getPlayers()) {
+            GameProfile profile = sp.getGameProfile();
+            if (!isVip(profile) && !isStaff(profile)) count++;
+        }
+        return count;
     }
 
     public int queueSize() { return queue.size(); }

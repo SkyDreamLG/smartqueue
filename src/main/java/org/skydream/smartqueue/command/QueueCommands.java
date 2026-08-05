@@ -26,8 +26,10 @@ public final class QueueCommands {
         CommandDispatcher<CommandSourceStack> dispatcher = event.getDispatcher();
 
         dispatcher.register(Commands.literal("smartqueue")
-                .requires(src -> src.hasPermission(2))
+                .then(Commands.literal("status")
+                        .executes(QueueCommands::status))
                 .then(Commands.literal("toggle")
+                        .requires(src -> src.hasPermission(2))
                         .then(Commands.argument("state", StringArgumentType.word())
                                 .suggests((ctx, builder) -> builder.suggest("on").suggest("off").buildFuture())
                                 .executes(QueueCommands::toggle))
@@ -41,6 +43,7 @@ public final class QueueCommands {
                         })
                 )
                 .then(Commands.literal("pause")
+                        .requires(src -> src.hasPermission(2))
                         .executes(ctx -> {
                             QueueManager qm = QueueManager.getInstance();
                             if (qm.isPaused()) {
@@ -55,6 +58,7 @@ public final class QueueCommands {
                         })
                 )
                 .then(Commands.literal("resume")
+                        .requires(src -> src.hasPermission(2))
                         .executes(ctx -> {
                             QueueManager qm = QueueManager.getInstance();
                             if (!qm.isPaused()) {
@@ -69,16 +73,15 @@ public final class QueueCommands {
                         })
                 )
                 .then(Commands.literal("reload")
+                        .requires(src -> src.hasPermission(2))
                         .executes(ctx -> {
                             ctx.getSource().sendSuccess(
                                     () -> Component.translatable("smartqueue.command.reloaded"), true);
                             return 1;
                         })
                 )
-                .then(Commands.literal("status")
-                        .executes(QueueCommands::status)
-                )
                 .then(Commands.literal("staff")
+                        .requires(src -> src.hasPermission(2))
                         .then(Commands.literal("add")
                                 .then(Commands.argument("name", StringArgumentType.word())
                                         .executes(ctx -> addStaff(ctx, StringArgumentType.getString(ctx, "name")))))
@@ -89,6 +92,7 @@ public final class QueueCommands {
                                 .executes(ctx -> listStaff(ctx)))
                 )
                 .then(Commands.literal("vip")
+                        .requires(src -> src.hasPermission(2))
                         .then(Commands.literal("add")
                                 .then(Commands.argument("name", StringArgumentType.word())
                                         .executes(ctx -> addVip(ctx, StringArgumentType.getString(ctx, "name")))))
@@ -119,6 +123,8 @@ public final class QueueCommands {
         boolean paused = qm.isPaused();
         int active = qm.activeCount();
         int queued = qm.queueSize();
+        int effectiveMax = Config.EFFECTIVE_MAX_PLAYERS.get();
+        int vipSlots = qm.effectiveVipSlots();
 
         ctx.getSource().sendSuccess(
                 () -> Component.translatable("smartqueue.command.status.header"), false);
@@ -126,23 +132,61 @@ public final class QueueCommands {
                 () -> Component.translatable("smartqueue.command.status.enabled", enabled, paused), false);
         ctx.getSource().sendSuccess(
                 () -> Component.translatable("smartqueue.command.status.active",
-                        active, Config.EFFECTIVE_MAX_PLAYERS.get()), false);
+                        active, effectiveMax), false);
+
+        if (vipSlots > 0) {
+            int vipOnline = qm.countVipEligibleOnline();
+            int vipAvailable = Math.max(0, vipSlots - vipOnline);
+            int nonVipLimit = effectiveMax - vipSlots;
+            int nonVipOnline = qm.countNonVipOnline();
+            ctx.getSource().sendSuccess(
+                    () -> Component.translatable("smartqueue.command.status.vip_slots",
+                            vipSlots, vipOnline, vipAvailable), false);
+            ctx.getSource().sendSuccess(
+                    () -> Component.translatable("smartqueue.command.status.nonvip_limit",
+                            nonVipLimit, nonVipOnline), false);
+        }
+
         ctx.getSource().sendSuccess(
                 () -> Component.translatable("smartqueue.command.status.queue_size",
                         queued, Config.MAX_QUEUE_SIZE.get()), false);
 
         if (!queue.isEmpty()) {
-            ctx.getSource().sendSuccess(
-                    () -> Component.translatable("smartqueue.command.status.queue_header"), false);
-            for (int i = 0; i < queue.size(); i++) {
-                QueueEntry entry = queue.get(i);
-                String typeKey = entry.staff ? "smartqueue.command.status.staff"
-                        : entry.vip ? "smartqueue.command.status.vip"
-                        : "smartqueue.command.status.normal";
-                final int pos = i + 1;
+            // Split into VIP-priority (staff/vip) and normal
+            List<QueueEntry> vipQueue = new java.util.ArrayList<>();
+            List<QueueEntry> normalQueue = new java.util.ArrayList<>();
+            for (QueueEntry e : queue) {
+                if (e.staff || e.vip) vipQueue.add(e);
+                else normalQueue.add(e);
+            }
+
+            if (!vipQueue.isEmpty()) {
                 ctx.getSource().sendSuccess(
-                        () -> Component.translatable("smartqueue.command.status.queue_entry",
-                                pos, Component.translatable(typeKey), entry.getName()), false);
+                        () -> Component.translatable("smartqueue.command.status.queue_header_vip",
+                                vipQueue.size()), false);
+                for (int i = 0; i < vipQueue.size(); i++) {
+                    QueueEntry entry = vipQueue.get(i);
+                    String typeKey = entry.staff ? "smartqueue.command.status.staff"
+                            : "smartqueue.command.status.vip";
+                    final int pos = i + 1;
+                    ctx.getSource().sendSuccess(
+                            () -> Component.translatable("smartqueue.command.status.queue_entry",
+                                    pos, Component.translatable(typeKey), entry.getName()), false);
+                }
+            }
+
+            if (!normalQueue.isEmpty()) {
+                ctx.getSource().sendSuccess(
+                        () -> Component.translatable("smartqueue.command.status.queue_header_normal",
+                                normalQueue.size()), false);
+                for (int i = 0; i < normalQueue.size(); i++) {
+                    QueueEntry entry = normalQueue.get(i);
+                    final int pos = i + 1;
+                    ctx.getSource().sendSuccess(
+                            () -> Component.translatable("smartqueue.command.status.queue_entry",
+                                    pos, Component.translatable("smartqueue.command.status.normal"),
+                                    entry.getName()), false);
+                }
             }
         }
         return 1;

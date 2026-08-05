@@ -22,6 +22,7 @@ SmartQueue 用一套可配置的、带优先级的排队系统替代了原版 Mi
 ### 功能特性
 
 - **可配置的玩家上限** — 将 `effective_max_players` 设得比 `server.properties max-players` 更低，预留管理员通道或强制启用排队
+- **VIP 专属槽位** — 将部分服务器名额预留给 VIP 玩家，确保赞助玩家始终能够进入
 - **实时排队界面** — 显示当前位置、排队总人数、前方等待人数、预计等待时间
 - **优先级分级** — Staff（最高优先级）、VIP、普通玩家，各等级使用独立的入场间隔
 - **断线重连恢复位置** — 在宽限时间内断开重连，可以恢复原来的排队位置
@@ -30,6 +31,7 @@ SmartQueue 用一套可配置的、带优先级的排队系统替代了原版 Mi
 - **完整的多语言支持** — 内置英文（`en_us`）和简体中文（`zh_cn`）
 - **配置文件热重载** — 运行时编辑 TOML 文件，修改自动生效
 - **游戏内管理命令** — 使用 `/smartqueue` 命令开关、暂停、查看状态、管理 Staff/VIP 名单，无需重启服务器
+- **公共状态命令** — `/smartqueue status` 面向所有玩家开放（无需权限），任何人都可以查看排队情况
 
 ## 运行要求
 
@@ -129,6 +131,7 @@ SmartQueue **需要同时安装在服务端和客户端**。服务端处理排�
 | `vip_admit_interval_ticks` | int | `40` | 1–72000 | 每放行一个 Staff/VIP 玩家的间隔 tick 数（默认 2 秒放一个）。 |
 | `rejoin_grace_ticks` | int | `6000` | 0–1728000 | 断线后重连保留排队位置的宽限时间。0 = 禁用。默认 6000 tick（5 分钟）。 |
 | `staff_bypass_queue` | bool | `false` | — | Staff 在服务器满时的行为。`false`（默认）= Staff 进入队列但排到最前面（插队）。`true` = Staff 完全跳过排队直接进入。**设为 `true` 时，请确保 `effective_max_players` 低于 `server.properties max-players`**，为 staff 预留直接进入的容量。 |
+| `vip_exclusive_slots` | int | `0` | 0–1024 | 为 VIP 玩家保留的专属槽位数量。> 0 时，普通玩家上限 = `effective_max_players - vip_exclusive_slots`。剩余槽位仅供 VIP（以及 `staff_bypass_queue=false` 时的 staff）使用。示例：`effective_max_players=35`, `vip_exclusive_slots=5` → 普通玩家上限为 30 人。若误设为大于 `effective_max_players` 的值，会自动钳制为有效上限。 |
 
 ### `smartqueue-staff.toml`
 
@@ -156,7 +159,7 @@ vip = ["Supporter1", "FriendName"]
 
 ## 命令参考
 
-所有命令需要**权限等级 2**（管理员）。根命令：`/smartqueue`
+管理类命令需要**权限等级 2**（管理员）。`/smartqueue status` 面向**所有玩家**开放。根命令：`/smartqueue`
 
 ### 队列控制
 
@@ -168,7 +171,7 @@ vip = ["Supporter1", "FriendName"]
 | `/smartqueue pause` | 暂停入场（玩家留在队列中，不新放行） |
 | `/smartqueue resume` | 恢复入场（重置计时器，继续放行） |
 | `/smartqueue reload` | 确认配置已重载 |
-| `/smartqueue status` | 查看排队状态：开关状态、暂停状态、活跃玩家数、排队人数、带优先级标签的玩家列表 |
+| `/smartqueue status` | 查看排队状态：活跃玩家数、最大容量、VIP 专属槽位使用情况（如已配置）、排队总人数、排队列表按 VIP 优先/普通分段显示。所有玩家均可使用。 |
 
 ### Staff 管理
 
@@ -219,6 +222,25 @@ staff_bypass_queue = true
 ```
 
 这样预留了 2 个位置给 Staff，他们永远不会超出原版人数上限。
+
+### VIP 专属槽位
+
+当 `vip_exclusive_slots` 设置为大于 0 的值时，服务器的一部分容量将专门保留给 VIP 玩家。普通玩家上限为 `effective_max_players - vip_exclusive_slots`，剩余槽位仅供 VIP 资格玩家占据。
+
+**工作原理示例：** `effective_max_players = 35`, `vip_exclusive_slots = 5`
+
+| 场景 | 非 VIP 在线 | VIP 资格在线 | 非 VIP 能进？ | VIP 能进？ |
+|---|---|---|---|---|
+| 服务器较空 | 20 | 3 | 是（20 < 30） | 是（23 < 35） |
+| 非 VIP 达到上限 | 30 | 2 | **排队**（30 ≥ 30） | 是（32 < 35） |
+| 服务器全满 | 30 | 5 | **排队**（30 ≥ 30） | **排队**（35 ≥ 35） |
+
+**与 `staff_bypass_queue` 的交互：**
+
+- `staff_bypass_queue = false`（默认）：VIP **和** staff 都计入 VIP 专属槽位。排队中的 staff 会被视为"VIP 资格"玩家占用槽位。
+- `staff_bypass_queue = true`：仅 VIP 玩家计入 VIP 专属槽位。Staff 完全跳过排队，不计入 VIP 槽位计数（但仍占据服务器上的一个普通位置）。
+
+**自动钳制：** 如果 `vip_exclusive_slots` 被误设为大于 `effective_max_players` 的值，会自动钳制为 `effective_max_players`（即全部槽位均为 VIP 专属），防止配置错误导致异常。
 
 ## 断线重连
 

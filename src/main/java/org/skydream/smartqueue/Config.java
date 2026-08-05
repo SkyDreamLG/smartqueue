@@ -25,6 +25,7 @@ public final class Config {
     public static final ModConfigSpec.IntValue VIP_ADMIT_INTERVAL_TICKS;
     public static final ModConfigSpec.IntValue REJOIN_GRACE_TICKS;
     public static final ModConfigSpec.BooleanValue STAFF_BYPASS_QUEUE;
+    public static final ModConfigSpec.IntValue VIP_EXCLUSIVE_SLOTS;
 
     static {
         MAIN_BUILDER.comment("SmartQueue Main Configuration",
@@ -75,6 +76,17 @@ public final class Config {
                         "Otherwise staff may push the server beyond the vanilla player limit.")
                 .translation("smartqueue.config.staff_bypass_queue")
                 .define("staff_bypass_queue", false);
+
+        VIP_EXCLUSIVE_SLOTS = MAIN_BUILDER
+                .comment("Number of player slots reserved exclusively for VIP users.",
+                        "When > 0, non-VIP players can only occupy (effective_max_players - vip_exclusive_slots) slots.",
+                        "The remaining slots are reserved for VIP (and optionally staff) players.",
+                        "Example: effective_max_players=35, vip_exclusive_slots=5 → non-VIP cap at 30.",
+                        "When staff_bypass_queue=false, staff also count toward VIP-exclusive slots.",
+                        "When staff_bypass_queue=true, only VIP count toward VIP-exclusive slots.",
+                        "Default: 0 (disabled — all slots are available to everyone).")
+                .translation("smartqueue.config.vip_exclusive_slots")
+                .defineInRange("vip_exclusive_slots", 0, 0, 1024);
         MAIN_BUILDER.pop();
 
         MAIN_SPEC = MAIN_BUILDER.build();
