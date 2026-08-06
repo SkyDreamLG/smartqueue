@@ -33,7 +33,8 @@ SmartQueue replaces vanilla Minecraft's "Server Full" rejection with a configura
 - **Full i18n** — English (`en_us`) and Simplified Chinese (`zh_cn`) included
 - **Hot-reloadable config** — edit TOML files on disk while the server runs; changes take effect automatically
 - **In-game management** — `/smartqueue` commands to toggle, pause, view status, and manage staff/VIP lists without restarting
-- **Public status command** — `/smartqueue status` is available to all players (no permission required) so anyone can check the queue
+- **Public status command** — `/smartqueue status` is available to all players (no permission required) so anyone can check the queue. OPs and staff (configurable) see full details including player names and identity tags; regular players see a simplified view with player names only — no VIP/staff identity tags exposed
+- **Sound effects** — audio feedback when entering the queue, leaving the queue, and being admitted to the server
 
 ## Requirements
 
@@ -169,6 +170,7 @@ All values are under the `[queue]` section.
 | `proportional_mode` | bool | `false` | — | Enable proportional admission mode. When `true`, VIP and normal players are admitted in a configurable ratio (e.g., 3 VIPs then 1 normal, alternating). Staff are always admitted first regardless. When `false`, the legacy dual-timer mode is used (VIPs and normals each have their own independent admission interval). |
 | `proportional_vip_count` | int | `2` | 1–100 | Number of VIP players to admit per proportional cycle. Only used when `proportional_mode = true`. |
 | `proportional_normal_count` | int | `1` | 1–100 | Number of normal players to admit per proportional cycle. Only used when `proportional_mode = true`. |
+| `staff_see_detailed_status` | bool | `true` | — | Whether non-OP staff members can see detailed queue status including player names and identity tags. OPs (permission level 2+) always see the full view regardless. When `false`, staff see the same simplified view as regular players. |
 
 ### `smartqueue-staff.toml`
 
@@ -208,7 +210,7 @@ All administrative commands require **permission level 2** (operator). `/smartqu
 | `/smartqueue pause` | Pause admission (players stay queued, no new admits) |
 | `/smartqueue resume` | Resume admission (resets timers, continues admitting) |
 | `/smartqueue reload` | Confirm config reload |
-| `/smartqueue status` | Show queue status: active players, max capacity, admission mode and ratio (when proportional), VIP exclusive slot usage (when configured), total queued, and players split into four queue sections (Staff / Priority Rejoin / VIP / Normal). The next player to be admitted is highlighted in green. In proportional mode, the admission balance state (Balanced or Anti-Imbalance) is shown. Available to all players. |
+| `/smartqueue status` | Show queue status. **OPs and staff** (configurable via `staff_see_detailed_status`) see active players, max capacity, admission mode and ratio, VIP exclusive slot usage, total queued, and four queue sections (Staff / Priority Rejoin / VIP / Normal) with player names and identity tags. **Regular players** see a simplified view: active players, max capacity, total queued, and two merged queues — Priority Rejoin Queue (disconnect rejoin) and Normal Queue (staff + VIP + normal merged) — with player names but no identity tags. |
 
 ### Staff Management
 
@@ -337,12 +339,24 @@ When a player connects and the server is full, they see:
 - **Pressing ESC does nothing** — the queue screen cannot be dismissed accidentally
 - Clicking "Leave Queue" disconnects and returns to the title screen
 
+### Sound Effects
+
+SmartQueue plays audio feedback at key queueing moments:
+
+| Event | Sound | Description |
+|---|---|---|
+| Entering the queue | `join_queue` | Played when the player first enters the queue (not on every position update) |
+| Leaving the queue | `leave_queue` | Played when the player voluntarily leaves the queue, or when the connection is lost/times out |
+| Admitted to server | `queue_completed` | Played when the player is admitted and joins the game world |
+
+Sound files (`.ogg`) are located in `assets/smartqueue/sounds/`. To customize sounds, replace these files or modify `sounds.json` to point to different audio resources.
+
 ### What the player sees
 
 1. Connect to a full server
-2. See the queue screen with position "Position: 1 / 1"
+2. Hear the join sound, see the queue screen with position "Position: 1 / 1"
 3. Watch the position and ETA update as players join behind them
-4. Position reaches "You are next!" → admitted → game world loads
+4. Position reaches "You are next!" → hear the admission sound → game world loads
 
 ## Architecture
 
