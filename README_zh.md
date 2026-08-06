@@ -17,7 +17,7 @@
 
 ## 概述
 
-SmartQueue 用一套可配置的、带优先级的排队系统替代了原版 Minecraft 的"服务器已满"拒绝机制。当服务器达到玩家上限后，新连接会被挂起在 NeoForge 的配置阶段（Configuration Phase）—— 他们会看到一个实时更新的排队界面，显示当前位置和预计等待时间，并在有空位时自动入场。Staff 和 VIP 玩家享有优先排队位置和更快的入场速度，中途断线的玩家可以在宽限时间内重新连接并恢复原来的排队位置。
+SmartQueue 用一套可配置的、带优先级的排队系统替代了原版 Minecraft 的"服务器已满"拒绝机制。当服务器达到玩家上限后，新连接会被挂起在 NeoForge 的配置阶段（Configuration Phase）—— 他们会看到一个实时更新的排队界面，显示当前位置和预计等待时间，并在有空位时自动入场。Staff 和 VIP 玩家享有优先排队位置和更快的入场速度，排队中断线的玩家可以在宽限时间内重连并原地恢复位置，不影响其他玩家排位。
 
 ### 功能特性
 
@@ -28,6 +28,7 @@ SmartQueue 用一套可配置的、带优先级的排队系统替代了原版 Mi
 - **比例放行模式** — 可选的比例放行（如"3个VIP后放2个普通"），配合防失衡保护，防止普通玩家被无限插队
 - **四个独立队列** — Staff、优先重连、VIP、普通四个队列，严格按优先级顺序放行
 - **断线重连恢复位置** — 在宽限时间内断开重连，可以恢复原来的排队位置
+- **断线位置保留** — 排队玩家短暂断线后在可配置的宽限时间内保持队列位置；重连后无缝恢复，不影响其他玩家排位
 - **自动补位** — 每个 tick 检查是否有空位，确保有空位时立即补入排队玩家
 - **暂停/恢复** — 维护期间可冻结排队，不踢出任何玩家
 - **完整的多语言支持** — 内置英文（`en_us`）和简体中文（`zh_cn`）
@@ -117,12 +118,18 @@ SmartQueue 支持两种放行模式，通过 `proportional_mode` 配置项切换
 
 ### 断线检测与超时保护
 
-通过 Mixin 注入 `ServerConfigurationPacketListenerImpl.onDisconnect()` 捕获排队玩家的断线事件。另外还有两套兜底机制：
+当排队玩家的连接断开时，SmartQueue **不会立即将其移出**。玩家的位置会在队列中保留一段可配置的宽限时间（`queue_disconnect_grace_ticks`，默认 60 秒）。在此期间：
+
+- 断线的条目保留在队列列表中 — 其他玩家的排位保持稳定
+- 放行**跳过**断线条目；其后方第一个在线的玩家会被放行
+- 如果玩家在宽限时间内重连，位置无缝恢复（无需"重连" — 同一槽位直接激活）
+- 宽限期过后，条目永久移除 — 玩家下次连接需重新排队
 
 | 机制 | 位置 | 说明 |
 |---|---|---|
-| **断线事件** | `ServerConfigDisconnectMixin` | 捕获配置阶段的 `onDisconnect` → 移出队列，保存重连记录 |
-| **Tick 清理** | `QueueManager.cleanupDisconnected()` | 每 tick 遍历所有排队连接，移除 `!isConnected()` 的条目 |
+| **断线事件** | `ServerConfigDisconnectMixin` | 捕获配置阶段的 `onDisconnect` → 标记为 DISCONNECTED（若 `queue_disconnect_grace_ticks = 0` 则直接移除） |
+| **Tick 清理** | `QueueManager.cleanupDisconnected()` | 每 tick 遍历所有排队连接，将失活连接标记为 DISCONNECTED |
+| **过期清理** | `QueueManager.cleanupExpiredDisconnected()` | 每 tick 移除宽限期已过的 DISCONNECTED 条目 |
 
 防止原版踢出空闲排队玩家：
 | 机制 | 位置 | 说明 |
@@ -136,7 +143,7 @@ SmartQueue 支持两种放行模式，通过 `proportional_mode` 配置项切换
 1. 客户端从 NeoForge 的 `IPayloadContext` 中获取当前 `Connection` 引用（收到状态包时缓存）
 2. 调用 `Connection.disconnect()` 关闭 TCP 连接
 3. 跳转至标题界面
-4. 服务端检测到断线 → 保存重连记录 → 将玩家移出队列
+4. 服务端检测到断线 → 标记 DISCONNECTED，宽限期内保留位置
 
 ### 连接看门狗
 
@@ -164,7 +171,8 @@ SmartQueue 支持两种放行模式，通过 `proportional_mode` 配置项切换
 | `max_queue_size` | int | `50` | 0–1024 | 最大排队人数。超出此限制的新连接会被断连并提示服务器已满。 |
 | `normal_admit_interval_ticks` | int | `100` | 1–72000 | 每放行一个普通玩家的间隔 tick 数。20 tick = 1 秒（默认 5 秒放一个）。 |
 | `vip_admit_interval_ticks` | int | `40` | 1–72000 | 每放行一个 Staff/VIP 玩家的间隔 tick 数（默认 2 秒放一个）。 |
-| `rejoin_grace_ticks` | int | `6000` | 0–1728000 | 断线后重连保留排队位置的宽限时间。0 = 禁用。默认 6000 tick（5 分钟）。 |
+| `rejoin_grace_ticks` | int | `6000` | 0–1728000 | WAS_PLAYING 重连宽限时间：正在游戏中的玩家断线后重连服务器已满时，进入优先重连队列。0 = 禁用。默认 6000 tick（5 分钟）。 |
+| `queue_disconnect_grace_ticks` | int | `6000` | 0–72000 | 排队玩家断线后保留其队列位置的时长（tick）。在此期间重连可无缝恢复位置。超时后永久移除。0 = 立即移除（不保留位置）。默认 6000 tick（5 分钟）。 |
 | `staff_bypass_queue` | bool | `false` | — | Staff 在服务器满时的行为。`false`（默认）= Staff 进入队列但排到最前面（插队）。`true` = Staff 完全跳过排队直接进入。**设为 `true` 时，请确保 `effective_max_players` 低于 `server.properties max-players`**，为 staff 预留直接进入的容量。 |
 | `vip_exclusive_slots` | int | `0` | 0–1024 | 为 VIP 玩家保留的专属槽位数量。> 0 时，普通玩家上限 = `effective_max_players - vip_exclusive_slots`。剩余槽位仅供 VIP（以及 `staff_bypass_queue=false` 时的 staff）使用。示例：`effective_max_players=35`, `vip_exclusive_slots=5` → 普通玩家上限为 30 人。若误设为大于 `effective_max_players` 的值，会自动钳制为有效上限。 |
 | `proportional_mode` | bool | `false` | — | 启用比例放行模式。设为 `true` 时，VIP 和普通玩家按可配置的比例交替放行（如每放 3 个 VIP 后放 1 个普通，循环往复）。Staff 不受比例限制，始终最先放行。设为 `false` 时使用传统的双计时器模式（VIP 和普通各自有独立的放行间隔）。 |
@@ -247,7 +255,6 @@ SmartQueue 维护四个独立队列。放行顺序严格按以下优先级：
 |---|---|---|
 | Staff 玩家 | Staff 队列 | 最前面（位置 0） |
 | WAS_PLAYING 重连（非 staff） | 优先重连队列 | 末尾（FIFO） |
-| WAS_QUEUING 重连 | 与之前相同的队列 | 恢复到保存的位置 |
 | VIP 玩家 | VIP 队列 | 末尾 |
 | 普通玩家 | 普通队列 | 末尾 |
 
@@ -292,22 +299,24 @@ staff_bypass_queue = true
 
 **自动钳制：** 如果 `vip_exclusive_slots` 被误设为大于 `effective_max_players` 的值，会自动钳制为 `effective_max_players`（即全部槽位均为 VIP 专属），防止配置错误导致异常。
 
-## 断线重连
+## 断线与重连
 
-排队中或游戏中的玩家断线后，在宽限时间内重新连接可保留或恢复排队位置。
+SmartQueue 对两种断线场景采用不同机制：
 
-### 重连类型
+### 1. 排队中断线 — 位置保留
 
-| 类型 | 触发条件 | 恢复方式 |
+玩家在**排队等待中**断线时，其位置在队列中保留 `queue_disconnect_grace_ticks`（默认 60 秒）。在此窗口内重连可无缝恢复原位置。超时后条目永久移除，玩家需重新排队。
+
+此机制由上文的 [断线检测与超时保护](#断线检测与超时保护) 章节描述的位置保留功能处理。
+
+### 2. 游戏中断线（WAS_PLAYING）— 优先重连
+
+玩家**正在游戏中**断线后，在 `rejoin_grace_ticks`（默认 5 分钟）内重连到已满服务器时，进入**优先重连队列** — 排在 Staff 之后、所有 VIP 和普通玩家之前。
+
+| 配置项 | 默认值 | 用途 |
 |---|---|---|
-| `WAS_QUEUING` | 玩家在排队中断开连接 | 恢复到原来的排队位置（上限为当前队列长度） |
-| `WAS_PLAYING` | 玩家正在游戏中，断开后重连时服务器已满 | 放入优先重连队列（FIFO 顺序，排在 Staff 之后、所有 VIP/普通队列之前） |
-
-### 配置
-
-- 将 `rejoin_grace_ticks` 设为正值（如 `6000` = 5 分钟）开启功能
-- 将 `rejoin_grace_ticks` 设为 `0` 完全禁用位置恢复
-- 过期的重连记录每个 tick 自动清理
+| `queue_disconnect_grace_ticks` | 6000（5分钟） | 排队中断线的位置保留时长 |
+| `rejoin_grace_ticks` | 6000（5分钟） | 游戏中断线后的优先重连窗口 |
 
 ## 玩家体验
 
@@ -368,7 +377,7 @@ SmartQueue 在排队的关键时刻播放提示音效：
 │    ├──► QueueManager.enqueue() ──► 玩家挂起在配置阶段     │
 │    │                                                      │
 │  QueueManager.onServerTick()                             │
-│    ├── 清理断开连接                                        │
+│    ├── 清理断线/过期条目                                   │
 │    ├── 放行玩家（传统双计时器 或 比例模式）               │
 │    ├── 防失衡补放行（比例模式）                            │
 │    └── 每 100 tick 广播 QueueStatusPayload                │
@@ -377,7 +386,7 @@ SmartQueue 在排队的关键时刻播放提示音效：
 │    └── 重置 keepAlive 计时器 + 移除 Netty 超时处理器      │
 │                                                          │
 │  ServerConfigDisconnectMixin (onDisconnect)              │
-│    └── 保存重连记录 + 移出队列                            │
+│    └── 标记 DISCONNECTED + 保留位置                       │
 ├──────────────────────────────────────────────────────────┤
 │                      网络层                              │
 │                                                          │
@@ -440,7 +449,7 @@ SmartQueue 在排队的关键时刻播放提示音效：
   │               │
   │               └─► 玩家点击"离开队列"
   │                     └─► TCP 断连
-  │                           └─► 服务端：保存重连记录，移出队列
+  │                           └─► 服务端：标记 DISCONNECTED，保留位置
 ```
 
 ## 从源码构建

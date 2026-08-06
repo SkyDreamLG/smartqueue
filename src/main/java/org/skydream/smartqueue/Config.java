@@ -29,6 +29,7 @@ public final class Config {
     public static final ModConfigSpec.BooleanValue PROPORTIONAL_MODE;
     public static final ModConfigSpec.IntValue PROPORTIONAL_VIP_COUNT;
     public static final ModConfigSpec.IntValue PROPORTIONAL_NORMAL_COUNT;
+    public static final ModConfigSpec.IntValue QUEUE_DISCONNECT_GRACE_TICKS;
     public static final ModConfigSpec.BooleanValue STAFF_SEE_DETAILED_STATUS;
 
     static {
@@ -70,6 +71,16 @@ public final class Config {
                         "Default: 6000 ticks = 5 minutes.")
                 .translation("smartqueue.config.rejoin_grace_ticks")
                 .defineInRange("rejoin_grace_ticks", 6000, 0, 1728000);
+
+        QUEUE_DISCONNECT_GRACE_TICKS = MAIN_BUILDER
+                .comment("Time window in server ticks during which a disconnected player's position",
+                        "is held in the queue. The player is skipped for admission but keeps their",
+                        "slot. If they reconnect within this window, they resume their position",
+                        "seamlessly. After expiry, they are permanently removed.",
+                        "0 disables position holding (player is removed immediately on disconnect).",
+                        "Default: 6000 ticks = 5 minutes.")
+                .translation("smartqueue.config.queue_disconnect_grace_ticks")
+                .defineInRange("queue_disconnect_grace_ticks", 6000, 0, 72000);
 
         STAFF_BYPASS_QUEUE = MAIN_BUILDER
                 .comment("Staff behavior when the server is full.",

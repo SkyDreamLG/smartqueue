@@ -120,7 +120,24 @@ public final class QueueManager {
         boolean staff = isStaff(profile);
         boolean vip = !staff && isVip(profile);
 
-        // Clean stale entry
+        // Restore disconnected entry if player reconnects within position-hold grace period
+        QueueEntry disconnected = byUuid.get(uuid);
+        if (disconnected != null && disconnected.state == QueueEntryState.DISCONNECTED) {
+            disconnected.connection = connection;
+            disconnected.serverPlayer = player;
+            disconnected.cookie = cookie;
+            disconnected.state = QueueEntryState.WAITING;
+            disconnected.disconnectedAtTick = 0;
+            byConnection.put(connection, disconnected);
+            Smartqueue.LOGGER.info("Player {} reconnected, queue position restored (queue={}, pos={})",
+                    profile.getName(), disconnected.queueType,
+                    queueFor(disconnected.queueType).indexOf(disconnected) + 1);
+            sendStatus(disconnected);
+            broadcastPositions();
+            return;
+        }
+
+        // Clean stale entry (only WAITING, DISCONNECTED handled above)
         QueueEntry old = byUuid.remove(uuid);
         if (old != null) {
             queueForEntry(old).remove(old);
@@ -156,19 +173,10 @@ public final class QueueManager {
             targetQueue = QueueType.NORMAL;
         }
 
-        long joinOrder;
-        if (isRejoin && rejoin.type == RejoinType.WAS_QUEUING && old != null) {
-            joinOrder = old.joinOrder;
-        } else {
-            joinOrder = ++globalJoinOrder;
-        }
-        entry = new QueueEntry(player, connection, cookie, profile, vip, staff, now, targetQueue, joinOrder);
+        entry = new QueueEntry(player, connection, cookie, profile, vip, staff, now, targetQueue, ++globalJoinOrder);
         List<QueueEntry> targetList = queueFor(targetQueue);
 
-        if (isRejoin && rejoin.type == RejoinType.WAS_QUEUING) {
-            int pos = Math.min(rejoin.savedPosition, targetList.size());
-            targetList.add(pos, entry);
-        } else if (isRejoin && rejoin.type == RejoinType.WAS_PLAYING) {
+        if (isRejoin && rejoin.type == RejoinType.WAS_PLAYING) {
             targetList.add(entry);
         } else if (staff) {
             targetList.add(0, entry);
@@ -186,24 +194,16 @@ public final class QueueManager {
 
     // ── Disconnect ──
 
-    private void saveRejoinForEntry(QueueEntry entry) {
-        int pos = queueForEntry(entry).indexOf(entry);
-        rejoinMap.put(entry.profile.getId(),
-                new RejoinEntry(entry.profile.getId(), RejoinType.WAS_QUEUING,
-                        entry.vip, entry.staff, pos, server.getTickCount(), entry.queueType));
-        Smartqueue.LOGGER.debug("saveRejoinForEntry: {} queueType={} pos={}", entry.getName(), entry.queueType, pos);
-    }
-
     public void onConnectionDisconnect(ServerConfigurationPacketListenerImpl listener) {
         Connection conn = listener.getConnection();
         Smartqueue.LOGGER.debug("onConnectionDisconnect: conn={}, queued={}", conn, byConnection.containsKey(conn));
         QueueEntry entry = byConnection.get(conn);
-        if (entry != null) {
-            saveRejoinForEntry(entry);
+        if (entry != null && entry.state == QueueEntryState.WAITING) {
+            entry.state = QueueEntryState.DISCONNECTED;
+            entry.disconnectedAtTick = server.getTickCount();
             byConnection.remove(conn);
-            queueForEntry(entry).remove(entry);
-            byUuid.remove(entry.profile.getId());
-            Smartqueue.LOGGER.info("Player {} left the queue (disconnected)", entry.getName());
+            Smartqueue.LOGGER.info("Player {} connection lost, holding queue position for {}s",
+                    entry.getName(), Config.QUEUE_DISCONNECT_GRACE_TICKS.get() / 20);
             broadcastPositions();
         }
     }
@@ -227,12 +227,30 @@ public final class QueueManager {
             var e = it.next();
             if (!e.getKey().isConnected()) {
                 QueueEntry entry = e.getValue();
-                Smartqueue.LOGGER.debug("cleanupDisconnected: removing {} (channel inactive)", entry.getName());
-                saveRejoinForEntry(entry);
+                if (entry.state != QueueEntryState.WAITING) {
+                    it.remove();
+                    continue;
+                }
+                entry.state = QueueEntryState.DISCONNECTED;
+                entry.disconnectedAtTick = server.getTickCount();
                 it.remove();
-                queueForEntry(entry).remove(entry);
-                byUuid.remove(entry.profile.getId());
-                Smartqueue.LOGGER.info("Player {} removed from queue (connection lost)", entry.getName());
+                Smartqueue.LOGGER.info("Player {} connection lost, holding queue position for {}s",
+                        entry.getName(), Config.QUEUE_DISCONNECT_GRACE_TICKS.get() / 20);
+            }
+        }
+    }
+
+    private void cleanupExpiredDisconnected(long now) {
+        int grace = Config.QUEUE_DISCONNECT_GRACE_TICKS.get();
+        for (List<QueueEntry> queue : List.of(staffQueue, priorityQueue, vipQueue, normalQueue)) {
+            var it = queue.iterator();
+            while (it.hasNext()) {
+                QueueEntry entry = it.next();
+                if (entry.state == QueueEntryState.DISCONNECTED && (now - entry.disconnectedAtTick) >= grace) {
+                    Smartqueue.LOGGER.info("Player {} removed from queue (reconnect timeout)", entry.getName());
+                    byUuid.remove(entry.profile.getId());
+                    it.remove();
+                }
             }
         }
     }
@@ -263,6 +281,7 @@ public final class QueueManager {
         if (grace > 0) instance.rejoinMap.values().removeIf(e -> (now - e.leftAtTick) > grace);
 
         instance.cleanupDisconnected();
+        instance.cleanupExpiredDisconnected(now);
         instance.cleanupRejected(now);
 
         if (!Config.ENABLED.get()) { instance.kickAllQueued(); return; }
@@ -479,7 +498,9 @@ public final class QueueManager {
         for (QueueEntry e : all) {
             byUuid.remove(e.profile.getId());
             byConnection.remove(e.connection);
-            e.connection.disconnect(Component.translatable("smartqueue.command.disabled"));
+            if (e.state != QueueEntryState.DISCONNECTED) {
+                e.connection.disconnect(Component.translatable("smartqueue.command.disabled"));
+            }
         }
         Smartqueue.LOGGER.info("Kicked {} queued players (queue disabled)", all.size());
     }
@@ -488,13 +509,12 @@ public final class QueueManager {
         Connection conn = listener.getConnection();
         Smartqueue.LOGGER.debug("leaveQueue: conn={}, queued={}", conn, byConnection.containsKey(conn));
         QueueEntry entry = byConnection.get(conn);
-        if (entry != null) {
-            saveRejoinForEntry(entry);
-            entry.state = QueueEntryState.LEFT;
+        if (entry != null && entry.state == QueueEntryState.WAITING) {
+            entry.state = QueueEntryState.DISCONNECTED;
+            entry.disconnectedAtTick = server.getTickCount();
             byConnection.remove(conn);
-            queueForEntry(entry).remove(entry);
-            byUuid.remove(entry.profile.getId());
-            Smartqueue.LOGGER.info("Player {} left the queue", entry.getName());
+            Smartqueue.LOGGER.info("Player {} left the queue, holding position for {}s",
+                    entry.getName(), Config.QUEUE_DISCONNECT_GRACE_TICKS.get() / 20);
             conn.disconnect(Component.translatable("smartqueue.screen.left"));
             broadcastPositions();
         }
@@ -549,7 +569,9 @@ public final class QueueManager {
     }
 
     private void broadcastPositions() {
-        for (QueueEntry e : allQueued()) sendStatus(e);
+        for (QueueEntry e : allQueued()) {
+            if (e.state == QueueEntryState.WAITING) sendStatus(e);
+        }
     }
 
     private void sendStatus(QueueEntry entry) {
@@ -704,6 +726,16 @@ public final class QueueManager {
 
     public boolean isQueuedConnection(Connection conn) {
         return byConnection.containsKey(conn);
+    }
+
+    public void cleanupIfDisconnected(UUID uuid) {
+        QueueEntry entry = byUuid.get(uuid);
+        if (entry != null && entry.state == QueueEntryState.DISCONNECTED) {
+            queueForEntry(entry).remove(entry);
+            byUuid.remove(uuid);
+            Smartqueue.LOGGER.info("Player {} removed from queue (joined directly, server not full)", entry.getName());
+            broadcastPositions();
+        }
     }
 
     // ── Status display (for commands) ──

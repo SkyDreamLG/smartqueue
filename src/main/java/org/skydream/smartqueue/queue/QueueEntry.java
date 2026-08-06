@@ -6,15 +6,16 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.server.network.CommonListenerCookie;
 
 public class QueueEntry {
-    public final ServerPlayer serverPlayer;
-    public final Connection connection;
-    public final CommonListenerCookie cookie;
+    public ServerPlayer serverPlayer;
+    public Connection connection;
+    public CommonListenerCookie cookie;
     public final GameProfile profile;
     public final boolean vip, staff;
     public final long queuedAtTick;
     public final long joinOrder;
     public QueueEntryState state;
     public QueueType queueType;
+    public long disconnectedAtTick;
 
     public QueueEntry(ServerPlayer serverPlayer, Connection connection, CommonListenerCookie cookie,
                       GameProfile profile, boolean vip, boolean staff, long queuedAtTick,

@@ -49,6 +49,8 @@ public class PlayerListMixin {
             LOGGER.debug("placeNewPlayer: queueing {}", player.getGameProfile().getName());
             QueueManager.getInstance().enqueue(connection, player, cookie);
             ci.cancel();
+        } else {
+            QueueManager.getInstance().cleanupIfDisconnected(player.getGameProfile().getId());
         }
     }
 }

@@ -17,7 +17,7 @@
 
 ## Overview
 
-SmartQueue replaces vanilla Minecraft's "Server Full" rejection with a configurable, priority-based player queue. When the server reaches its player limit, new connections are parked in NeoForge's Configuration Phase — they see a real-time queue screen with position and ETA, and are admitted automatically as slots open. Staff and VIP players get priority placement and faster admission intervals, and players who disconnect can rejoin within a configurable grace period without losing their queue position.
+SmartQueue replaces vanilla Minecraft's "Server Full" rejection with a configurable, priority-based player queue. When the server reaches its player limit, new connections are parked in NeoForge's Configuration Phase — they see a real-time queue screen with position and ETA, and are admitted automatically as slots open. Staff and VIP players get priority placement and faster admission intervals, and players who disconnect have their position held in the queue for a configurable grace period, resuming seamlessly on reconnect.
 
 ### Features
 
@@ -28,6 +28,7 @@ SmartQueue replaces vanilla Minecraft's "Server Full" rejection with a configura
 - **Proportional admission mode** — optional ratio-based admission (e.g., "3 VIPs then 2 normals") with anti-imbalance protection to prevent normals from being starved
 - **Four independent queues** — Staff, Priority Rejoin, VIP, and Normal queues with strict admission order
 - **Rejoin with position recovery** — disconnect and come back within the grace window to keep your place in line
+- **Disconnect position hold** — briefly disconnected queue players hold their position for a configurable grace period; reconnect seamlessly without losing their spot or shifting other players' positions
 - **Automatic slot refill** — safety net on every tick ensures no slot stays empty when players are waiting
 - **Pause / resume** — freeze the queue during maintenance without kicking anyone
 - **Full i18n** — English (`en_us`) and Simplified Chinese (`zh_cn`) included
@@ -117,12 +118,18 @@ When admitted, the player's `placeNewPlayer()` is called for real (bypassing the
 
 ### Disconnect & Timeout Protection
 
-A mixin on `ServerConfigurationPacketListenerImpl.onDisconnect()` catches disconnects from queued players. Two additional mechanisms ensure cleanup:
+When a queued player's connection drops, SmartQueue does **not** immediately remove them. Instead, the player's position is held in the queue for a configurable grace period (`queue_disconnect_grace_ticks`, default 60 seconds). During this window:
+
+- The disconnected entry stays in the queue list — other players' positions remain stable
+- Admission **skips** disconnected entries; the next connected player behind them gets in
+- If the player reconnects within the grace period, their position is restored seamlessly (no "rejoin" needed — the same slot is reactivated)
+- If the grace period expires, the entry is permanently removed — the player must queue fresh on their next connection
 
 | Mechanism | Location | Description |
 |---|---|---|
-| **Disconnect event** | `ServerConfigDisconnectMixin` | Catches `onDisconnect` on the config listener → removes from queue, saves rejoin entry |
-| **Tick cleanup** | `QueueManager.cleanupDisconnected()` | Every tick, iterates all queued connections and removes any where `!isConnected()` |
+| **Disconnect event** | `ServerConfigDisconnectMixin` | Catches `onDisconnect` on the config listener → marks entry DISCONNECTED (or removes immediately if `queue_disconnect_grace_ticks = 0`) |
+| **Tick cleanup** | `QueueManager.cleanupDisconnected()` | Every tick, iterates all queued connections and marks inactive ones as DISCONNECTED |
+| **Expiry cleanup** | `QueueManager.cleanupExpiredDisconnected()` | Every tick, removes DISCONNECTED entries whose grace period has expired |
 
 To prevent vanilla from kicking idle queued players:
 | Mechanism | Location | Description |
@@ -136,7 +143,7 @@ The queue screen includes a "Leave Queue" button. When clicked:
 1. The client captures the active `Connection` (obtained from NeoForge's `IPayloadContext` when status packets arrive)
 2. Calls `Connection.disconnect()` to close the TCP channel
 3. Navigates to the title screen
-4. The server detects the disconnect → saves a rejoin entry → removes the player from the queue
+4. The server detects the disconnect → marks the entry DISCONNECTED, holds position for the grace period
 
 ### Connection Watchdog
 
@@ -164,7 +171,8 @@ All values are under the `[queue]` section.
 | `max_queue_size` | int | `50` | 0–1024 | Maximum players waiting in the queue. Connections beyond this are disconnected with a "server full" message. |
 | `normal_admit_interval_ticks` | int | `100` | 1–72000 | Ticks between admitting each normal player. 20 ticks = 1 second (default: 5 s). |
 | `vip_admit_interval_ticks` | int | `40` | 1–72000 | Ticks between admitting each Staff/VIP player (default: 2 s). |
-| `rejoin_grace_ticks` | int | `6000` | 0–1728000 | Time window after disconnecting during which a rejoining player keeps their queue position. 0 = disabled. Default: 6000 ticks (5 minutes). |
+| `rejoin_grace_ticks` | int | `6000` | 0–1728000 | Time window for WAS_PLAYING rejoin: a player who was in the game, disconnects, and reconnects to a full server gets Priority Rejoin queue placement. 0 = disabled. Default: 6000 ticks (5 minutes). |
+| `queue_disconnect_grace_ticks` | int | `6000` | 0–72000 | Time in ticks a disconnected queue player's position is held in place. Reconnect within this window to resume seamlessly. Expired entries are permanently removed. 0 = immediate removal (no position hold). Default: 6000 ticks (5 minutes). |
 | `staff_bypass_queue` | bool | `false` | — | Staff behavior when the server is full. `false` = staff enter the queue at the front (priority insert). `true` = staff skip the queue entirely and join directly. **When `true`, ensure `effective_max_players` is lower than `server.properties max-players`** to reserve slots for staff. |
 | `vip_exclusive_slots` | int | `0` | 0–1024 | Number of slots reserved exclusively for VIP users. When > 0, non-VIP players are capped at `effective_max_players - vip_exclusive_slots`. The remaining slots can only be filled by VIP (and staff, when `staff_bypass_queue=false`). Example: `effective_max_players=35`, `vip_exclusive_slots=5` → non-VIP cap is 30. If misconfigured higher than `effective_max_players`, the value is clamped automatically. |
 | `proportional_mode` | bool | `false` | — | Enable proportional admission mode. When `true`, VIP and normal players are admitted in a configurable ratio (e.g., 3 VIPs then 1 normal, alternating). Staff are always admitted first regardless. When `false`, the legacy dual-timer mode is used (VIPs and normals each have their own independent admission interval). |
@@ -247,7 +255,6 @@ When a player is queued:
 |---|---|---|
 | Staff player | Staff Queue | Front (position 0) |
 | WAS_PLAYING rejoin (non-staff) | Priority Rejoin Queue | End (FIFO) |
-| WAS_QUEUING rejoin | Same queue as before | Saved position |
 | VIP player | VIP Queue | End |
 | Normal player | Normal Queue | End |
 
@@ -292,22 +299,24 @@ When `vip_exclusive_slots` is set to a value greater than 0, a portion of the se
 
 **Auto-clamping:** If `vip_exclusive_slots` is accidentally set higher than `effective_max_players`, it is automatically clamped to `effective_max_players` (treating all slots as VIP-exclusive) to prevent misconfiguration.
 
-## Rejoin System
+## Disconnect & Rejoin
 
-Players who disconnect while in the queue (or while playing, then the server fills up before they return) can rejoin within the grace period and keep their position.
+SmartQueue handles two types of disconnects differently:
 
-### Rejoin Types
+### 1. Queue Disconnect — Position Hold
 
-| Type | Trigger | Recovery |
+When a player disconnected **while waiting in the queue**, their position is held for `queue_disconnect_grace_ticks` (default 60 seconds). Reconnect within this window to resume seamlessly at the same position. If the window expires, the entry is permanently removed and the player must queue fresh.
+
+This is handled by the position-hold mechanism described in [Disconnect & Timeout Protection](#disconnect--timeout-protection) above.
+
+### 2. In-Game Disconnect (WAS_PLAYING) — Priority Rejoin
+
+When a player was **actively playing**, disconnects, and reconnects to a full server within `rejoin_grace_ticks` (default 5 minutes), they are placed in the **Priority Rejoin Queue** — admitted after Staff but before all VIP and Normal queues.
+
+| Configuration | Default | Purpose |
 |---|---|---|
-| `WAS_QUEUING` | Player disconnects while waiting in the queue | Restored at original position (capped at current queue size) |
-| `WAS_PLAYING` | Player was actively playing, then disconnected and tries to rejoin a full server | Placed in Priority Rejoin Queue (FIFO order, admitted after Staff but before all VIP/Normal queues) |
-
-### Configuration
-
-- Set `rejoin_grace_ticks` to a positive value (e.g., `6000` = 5 minutes) to enable
-- Set `rejoin_grace_ticks` to `0` to disable rejoin position recovery entirely
-- Expired rejoin entries are purged each tick
+| `queue_disconnect_grace_ticks` | 6000 (5min) | Position hold for queued player disconnect |
+| `rejoin_grace_ticks` | 6000 (5min) | Priority rejoin window for in-game player disconnect |
 
 ## Client Experience
 
@@ -370,7 +379,7 @@ Sound files (`.ogg`) are located in `assets/smartqueue/sounds/`. To customize so
 │    │                               Config Phase          │
 │    │                                                     │
 │  QueueManager.onServerTick()                             │
-│    ├── Cleanup disconnected connections                  │
+│    ├── Cleanup disconnected / expired entries             │
 │    ├── Admit players (legacy dual-timer or proportional) │
 │    ├── Anti-imbalance catch-up (proportional mode)       │
 │    └── Broadcast QueueStatusPayload every 100 ticks      │
@@ -379,7 +388,7 @@ Sound files (`.ogg`) are located in `assets/smartqueue/sounds/`. To customize so
 │    └── Reset keepAlive timers + remove Netty timeout     │
 │                                                          │
 │  ServerConfigDisconnectMixin (onDisconnect)              │
-│    └── Save rejoin entry + remove from queue             │
+│    └── Mark DISCONNECTED + hold position                 │
 ├──────────────────────────────────────────────────────────┤
 │                    Network Layer                         │
 │                                                          │
@@ -442,7 +451,7 @@ Player Connects
   │               │
   │               └─► Player clicks "Leave Queue"
   │                     └─► TCP disconnect
-  │                           └─► Server: save rejoin entry, remove from queue
+  │                           └─► Server: mark DISCONNECTED, hold position
 ```
 
 ## Building from Source
