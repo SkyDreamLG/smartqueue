@@ -29,6 +29,7 @@ public final class Config {
     public static final ModConfigSpec.BooleanValue PROPORTIONAL_MODE;
     public static final ModConfigSpec.IntValue PROPORTIONAL_VIP_COUNT;
     public static final ModConfigSpec.IntValue PROPORTIONAL_NORMAL_COUNT;
+    public static final ModConfigSpec.BooleanValue STAFF_SEE_DETAILED_STATUS;
 
     static {
         MAIN_BUILDER.comment("SmartQueue Main Configuration",
@@ -110,6 +111,13 @@ public final class Config {
                         "Only used when proportional_mode is true.")
                 .translation("smartqueue.config.proportional_normal_count")
                 .defineInRange("proportional_normal_count", 1, 1, 100);
+
+        STAFF_SEE_DETAILED_STATUS = MAIN_BUILDER
+                .comment("Whether non-OP staff members can see detailed queue status (player names, VIP tags).",
+                        "OPs (permission level 2+) always see the full detailed view.",
+                        "When false, staff see the same simplified view as regular players.")
+                .translation("smartqueue.config.staff_see_detailed_status")
+                .define("staff_see_detailed_status", true);
         MAIN_BUILDER.pop();
 
         MAIN_SPEC = MAIN_BUILDER.build();

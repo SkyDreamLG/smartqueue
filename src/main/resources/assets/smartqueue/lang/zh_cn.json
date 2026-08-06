@@ -52,6 +52,7 @@
   "smartqueue.command.status.queue_header_normal": "§e--- 普通队列 (%s人) ---",
   "smartqueue.command.status.queue_entry": "  §f%s. %s §f%s",
   "smartqueue.command.status.queue_entry_next": "  §a§l>> §f%s. %s §f%s §a§l<<",
+  "smartqueue.command.status.queue_entry_simple": "  §f%s. §f%s",
   "smartqueue.command.status.staff": "§c[STAFF]",
   "smartqueue.command.status.priority_rejoin": "§6[优先重连]",
   "smartqueue.command.status.vip": "§d[VIP]",

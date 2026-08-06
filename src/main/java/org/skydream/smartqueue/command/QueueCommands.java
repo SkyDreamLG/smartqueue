@@ -14,6 +14,7 @@ import org.skydream.smartqueue.Smartqueue;
 import org.skydream.smartqueue.queue.QueueEntry;
 import org.skydream.smartqueue.queue.QueueManager;
 
+import java.util.ArrayList;
 import java.util.List;
 
 @EventBusSubscriber(modid = Smartqueue.MODID, bus = EventBusSubscriber.Bus.GAME)
@@ -119,6 +120,24 @@ public final class QueueCommands {
     private static int status(CommandContext<CommandSourceStack> ctx) {
         QueueManager qm = QueueManager.getInstance();
         QueueManager.QueueSnapshot snap = qm.getSnapshot();
+
+        if (canSeeDetailedStatus(ctx.getSource())) {
+            return statusDetailed(ctx, qm, snap);
+        } else {
+            return statusSimple(ctx, qm, snap);
+        }
+    }
+
+    private static boolean canSeeDetailedStatus(CommandSourceStack src) {
+        if (src.hasPermission(2)) return true;
+        if (!Config.STAFF_SEE_DETAILED_STATUS.get()) return false;
+        var player = src.getPlayer();
+        if (player == null) return true;
+        return QueueManager.getInstance().isStaff(player.getGameProfile());
+    }
+
+    private static int statusDetailed(CommandContext<CommandSourceStack> ctx,
+                                       QueueManager qm, QueueManager.QueueSnapshot snap) {
         boolean enabled = Config.ENABLED.get();
         boolean paused = qm.isPaused();
         boolean proportional = Config.PROPORTIONAL_MODE.get();
@@ -172,7 +191,6 @@ public final class QueueCommands {
 
         QueueEntry next = snap.nextAdmit();
 
-        // Staff queue
         if (!snap.staff().isEmpty()) {
             ctx.getSource().sendSuccess(
                     () -> Component.translatable("smartqueue.command.status.queue_header_staff",
@@ -180,7 +198,6 @@ public final class QueueCommands {
             renderQueueEntries(ctx, snap.staff(), next, "smartqueue.command.status.staff");
         }
 
-        // Priority rejoin queue
         if (!snap.priority().isEmpty()) {
             ctx.getSource().sendSuccess(
                     () -> Component.translatable("smartqueue.command.status.queue_header_priority",
@@ -189,7 +206,6 @@ public final class QueueCommands {
                     "smartqueue.command.status.priority_rejoin");
         }
 
-        // VIP queue
         if (!snap.vip().isEmpty()) {
             ctx.getSource().sendSuccess(
                     () -> Component.translatable("smartqueue.command.status.queue_header_vip",
@@ -197,7 +213,6 @@ public final class QueueCommands {
             renderQueueEntries(ctx, snap.vip(), next, "smartqueue.command.status.vip");
         }
 
-        // Normal queue
         if (!snap.normal().isEmpty()) {
             ctx.getSource().sendSuccess(
                     () -> Component.translatable("smartqueue.command.status.queue_header_normal",
@@ -206,6 +221,59 @@ public final class QueueCommands {
         }
 
         return 1;
+    }
+
+    private static int statusSimple(CommandContext<CommandSourceStack> ctx,
+                                     QueueManager qm, QueueManager.QueueSnapshot snap) {
+        boolean enabled = Config.ENABLED.get();
+        boolean paused = qm.isPaused();
+        int active = qm.activeCount();
+        int queued = qm.queueSize();
+        int effectiveMax = Config.EFFECTIVE_MAX_PLAYERS.get();
+
+        ctx.getSource().sendSuccess(
+                () -> Component.translatable("smartqueue.command.status.header"), false);
+        ctx.getSource().sendSuccess(
+                () -> Component.translatable("smartqueue.command.status.enabled", enabled, paused), false);
+        ctx.getSource().sendSuccess(
+                () -> Component.translatable("smartqueue.command.status.active",
+                        active, effectiveMax), false);
+        ctx.getSource().sendSuccess(
+                () -> Component.translatable("smartqueue.command.status.queue_size",
+                        queued, Config.MAX_QUEUE_SIZE.get()), false);
+
+        if (queued == 0) return 1;
+
+        if (!snap.priority().isEmpty()) {
+            ctx.getSource().sendSuccess(
+                    () -> Component.translatable("smartqueue.command.status.queue_header_priority",
+                            snap.priority().size()), false);
+            renderSimpleQueueEntries(ctx, snap.priority());
+        }
+
+        List<QueueEntry> mergedNormal = new ArrayList<>();
+        mergedNormal.addAll(snap.staff());
+        mergedNormal.addAll(snap.vip());
+        mergedNormal.addAll(snap.normal());
+        if (!mergedNormal.isEmpty()) {
+            ctx.getSource().sendSuccess(
+                    () -> Component.translatable("smartqueue.command.status.queue_header_normal",
+                            mergedNormal.size()), false);
+            renderSimpleQueueEntries(ctx, mergedNormal);
+        }
+
+        return 1;
+    }
+
+    private static void renderSimpleQueueEntries(CommandContext<CommandSourceStack> ctx,
+                                                  List<QueueEntry> entries) {
+        for (int i = 0; i < entries.size(); i++) {
+            QueueEntry entry = entries.get(i);
+            final int pos = i + 1;
+            ctx.getSource().sendSuccess(
+                    () -> Component.translatable("smartqueue.command.status.queue_entry_simple",
+                            pos, entry.getName()), false);
+        }
     }
 
     private static void renderQueueEntries(CommandContext<CommandSourceStack> ctx,

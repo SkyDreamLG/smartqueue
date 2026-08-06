@@ -4,14 +4,24 @@ import com.mojang.logging.LogUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.multiplayer.ClientCommonPacketListenerImpl;
+import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.network.Connection;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.sounds.SoundEvent;
 import org.skydream.smartqueue.network.QueuePayloads;
 import org.slf4j.Logger;
 
 public final class ClientQueueState {
 
     private static final Logger LOGGER = LogUtils.getLogger();
+
+    private static final SoundEvent SOUND_JOIN_QUEUE = SoundEvent.createVariableRangeEvent(
+            ResourceLocation.fromNamespaceAndPath("smartqueue", "join_queue"));
+    private static final SoundEvent SOUND_LEAVE_QUEUE = SoundEvent.createVariableRangeEvent(
+            ResourceLocation.fromNamespaceAndPath("smartqueue", "leave_queue"));
+    private static final SoundEvent SOUND_QUEUE_COMPLETED = SoundEvent.createVariableRangeEvent(
+            ResourceLocation.fromNamespaceAndPath("smartqueue", "queue_completed"));
 
     private static final long CONNECTION_WARN_MS = 30_000;
     private static final long CONNECTION_GIVE_UP_MS = 60_000;
@@ -66,10 +76,12 @@ public final class ClientQueueState {
             queued = false;
             admitted = true;
             rejected = false;
+            playSound(SOUND_QUEUE_COMPLETED);
             Minecraft.getInstance().setScreen(null);
             return;
         }
 
+        boolean firstJoin = !queued;
         queued = true;
         admitted = false;
         rejected = false;
@@ -80,6 +92,7 @@ public final class ClientQueueState {
         etaSeconds = payload.etaSeconds();
         LOGGER.debug("update() state updated: position={}, total={}, ahead={}, eta={}, paused={}",
                 position, total, ahead, etaSeconds, paused);
+        if (firstJoin) playSound(SOUND_JOIN_QUEUE);
         ensureScreen();
     }
 
@@ -104,6 +117,7 @@ public final class ClientQueueState {
             queued = false;
             admitted = false;
             rejected = false;
+            playSound(SOUND_LEAVE_QUEUE);
 
             conn.disconnect(Component.translatable("smartqueue.screen.left"));
             mc.setScreen(new TitleScreen());
@@ -131,6 +145,7 @@ public final class ClientQueueState {
             queued = false;
             left = true;
             connectionLost = false;
+            playSound(SOUND_LEAVE_QUEUE);
             Minecraft.getInstance().setScreen(new TitleScreen());
             return;
         }
@@ -144,6 +159,7 @@ public final class ClientQueueState {
             queued = false;
             left = true;
             connectionLost = false;
+            playSound(SOUND_LEAVE_QUEUE);
             Minecraft mc = Minecraft.getInstance();
             if (capturedConnection != null) {
                 capturedConnection.disconnect(Component.translatable("smartqueue.screen.server_lost"));
@@ -176,6 +192,11 @@ public final class ClientQueueState {
     public static int getTotal() { return total; }
     public static int getAhead() { return ahead; }
     public static int getEtaSeconds() { return etaSeconds; }
+
+    private static void playSound(SoundEvent sound) {
+        Minecraft.getInstance().getSoundManager().play(
+                SimpleSoundInstance.forUI(sound, 1.0f, 1.0f));
+    }
 
     public static void reset() {
         LOGGER.debug("reset() called");

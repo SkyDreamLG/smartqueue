@@ -1,0 +1,11 @@
+{
+  "join_queue": {
+    "sounds": ["smartqueue:join_queue"]
+  },
+  "leave_queue": {
+    "sounds": ["smartqueue:leave_queue"]
+  },
+  "queue_completed": {
+    "sounds": ["smartqueue:queue_completed"]
+  }
+}
