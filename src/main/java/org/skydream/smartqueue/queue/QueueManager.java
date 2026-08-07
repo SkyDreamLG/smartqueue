@@ -31,6 +31,7 @@ public final class QueueManager {
     private final List<QueueEntry> normalQueue = new ArrayList<>();
     private final Map<UUID, QueueEntry> byUuid = new HashMap<>();
     private final Map<UUID, RejoinEntry> rejoinMap = new HashMap<>();
+    private final Map<UUID, List<Long>> rejoinHistory = new HashMap<>();
     private final Map<Connection, QueueEntry> byConnection = new HashMap<>();
     private final Map<Connection, Integer> rejectedConnections = new HashMap<>();
     private boolean paused;
@@ -42,6 +43,7 @@ public final class QueueManager {
     private int proportionalPhaseCount = 0;
     private long globalJoinOrder = 0;
     private int skippedNormalCount = 0;
+    private QueueEntry lockedEntry = null;
 
     private static final ThreadLocal<Boolean> ADMITTING = ThreadLocal.withInitial(() -> false);
     private static final int KEEPALIVE_INTERVAL = 100;
@@ -63,6 +65,7 @@ public final class QueueManager {
             instance.normalQueue.clear();
             instance.byUuid.clear();
             instance.rejoinMap.clear();
+            instance.rejoinHistory.clear();
             instance.byConnection.clear();
             instance.paused = false;
             instance.vipTimer = 0;
@@ -71,6 +74,7 @@ public final class QueueManager {
             instance.proportionalPhaseCount = 0;
             instance.globalJoinOrder = 0;
             instance.skippedNormalCount = 0;
+            instance.lockedEntry = null;
         }
         instance = null;
     }
@@ -155,10 +159,33 @@ public final class QueueManager {
             if (grace == 0 || (now - rejoin.leftAtTick) <= grace) isRejoin = true;
         }
 
+        // Rejoin rate limiting
+        boolean rateLimited = false;
+        if (isRejoin && rejoin.type == RejoinType.WAS_PLAYING
+                && Config.REJOIN_RATE_LIMIT_ENABLED.get()) {
+            long window = Config.REJOIN_RATE_LIMIT_WINDOW_TICKS.get();
+            int maxCount = Config.REJOIN_RATE_LIMIT_MAX_COUNT.get();
+            List<Long> history = rejoinHistory.computeIfAbsent(uuid, k -> new ArrayList<>());
+            history.add(now);
+            long cutoff = now - window;
+            history.removeIf(t -> t < cutoff);
+            if (history.size() > maxCount) {
+                rateLimited = true;
+                isRejoin = false;
+                Smartqueue.LOGGER.info("Player {} rejoin rate limit exceeded ({}/{}), treating as new",
+                        profile.getName(), history.size(), maxCount);
+            }
+        }
+        // Clear history only when rejoin chain is genuinely broken (not rate-limited)
+        if (!isRejoin && !rateLimited) {
+            rejoinHistory.remove(uuid);
+        }
+
         int totalQueued = staffQueue.size() + priorityQueue.size() + vipQueue.size() + normalQueue.size();
         if (!isRejoin && totalQueued >= Config.MAX_QUEUE_SIZE.get()) {
             connection.send(new ClientboundCustomPayloadPacket(
-                    new QueuePayloads.QueueStatusPayload(0, 0, 0, false, false, 0, true)));
+                    new QueuePayloads.QueueStatusPayload(0, 0, 0, false, false, 0, true,
+                            false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0)));
             rejectedConnections.put(connection, server.getTickCount());
             Smartqueue.LOGGER.info("Rejected {} — queue is full", profile.getName());
             return;
@@ -203,12 +230,25 @@ public final class QueueManager {
         Smartqueue.LOGGER.debug("onConnectionDisconnect: conn={}, queued={}", conn, byConnection.containsKey(conn));
         QueueEntry entry = byConnection.get(conn);
         if (entry != null && entry.state == QueueEntryState.WAITING) {
+            if (entry == lockedEntry) lockedEntry = null;
             entry.state = QueueEntryState.DISCONNECTED;
             entry.disconnectedAtTick = server.getTickCount();
             byConnection.remove(conn);
             Smartqueue.LOGGER.info("Player {} connection lost, holding queue position for {}s",
                     entry.getName(), Config.QUEUE_DISCONNECT_GRACE_TICKS.get() / 20);
             broadcastPositions();
+        }
+    }
+
+    private void cleanupRejoinHistory(long now) {
+        if (!Config.REJOIN_RATE_LIMIT_ENABLED.get()) return;
+        long window = Config.REJOIN_RATE_LIMIT_WINDOW_TICKS.get();
+        long cutoff = now - window;
+        var it = rejoinHistory.values().iterator();
+        while (it.hasNext()) {
+            List<Long> history = it.next();
+            history.removeIf(t -> t < cutoff);
+            if (history.isEmpty()) it.remove();
         }
     }
 
@@ -252,6 +292,7 @@ public final class QueueManager {
                 QueueEntry entry = it.next();
                 if (entry.state == QueueEntryState.DISCONNECTED && (now - entry.disconnectedAtTick) >= grace) {
                     Smartqueue.LOGGER.info("Player {} removed from queue (reconnect timeout)", entry.getName());
+                    if (entry == lockedEntry) lockedEntry = null;
                     byUuid.remove(entry.profile.getId());
                     it.remove();
                 }
@@ -294,6 +335,7 @@ public final class QueueManager {
         if (instance.keepAliveTimer >= KEEPALIVE_INTERVAL) {
             instance.keepAliveTimer = 0;
             if (instance.hasAnyQueued()) instance.broadcastPositions();
+            instance.cleanupRejoinHistory(now);
         }
 
         if (instance.paused) return;
@@ -341,6 +383,8 @@ public final class QueueManager {
 
     private void admitNextProportional() {
         if (isServerFull()) return;
+
+        if (tryAdmitLocked()) return;
 
         // 1. Staff always first
         if (admitFirstFrom(staffQueue)) return;
@@ -405,6 +449,7 @@ public final class QueueManager {
 
     private void admitNextLegacy(boolean vip) {
         if (isServerFull()) return;
+        if (tryAdmitLocked()) return;
         int vipSlots = effectiveVipSlots();
         if (!vip && vipSlots > 0) {
             int nonVipLimit = Config.EFFECTIVE_MAX_PLAYERS.get() - vipSlots;
@@ -421,6 +466,14 @@ public final class QueueManager {
     }
 
     // ── Helpers ──
+
+    private boolean tryAdmitLocked() {
+        if (lockedEntry != null && lockedEntry.state == QueueEntryState.WAITING) {
+            admit(lockedEntry); // admit() clears lockedEntry and calls broadcastPositions()
+            return true;
+        }
+        return false;
+    }
 
     private boolean admitFirstFrom(List<QueueEntry> q) {
         for (QueueEntry e : q) {
@@ -475,6 +528,7 @@ public final class QueueManager {
     }
 
     private void admit(QueueEntry entry) {
+        if (entry == lockedEntry) lockedEntry = null;
         entry.state = QueueEntryState.ADMITTED;
         queueForEntry(entry).remove(entry);
         byUuid.remove(entry.profile.getId());
@@ -488,7 +542,8 @@ public final class QueueManager {
         }
         int total = totalQueued();
         entry.connection.send(new ClientboundCustomPayloadPacket(
-                new QueuePayloads.QueueStatusPayload(0, total, 0, true, paused, 0, false)));
+                new QueuePayloads.QueueStatusPayload(0, total, 0, true, paused, 0, false,
+                        false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0)));
         broadcastPositions();
     }
 
@@ -527,6 +582,7 @@ public final class QueueManager {
     private boolean tryAdmit() {
         if (paused || !Config.ENABLED.get()) return false;
         if (!isServerFull()) {
+            if (tryAdmitLocked()) return true;
             if (admitFirstFrom(staffQueue)) return true;
             if (admitFirstFrom(priorityQueue)) return true;
             if (skippedNormalCount > 0) {
@@ -546,59 +602,191 @@ public final class QueueManager {
 
     // ── Unified view for client ──
 
-    private int computeAhead(QueueEntry entry) {
-        return switch (entry.queueType) {
-            case STAFF -> indexOfWaiting(staffQueue, entry);
-            case PRIORITY -> countWaiting(staffQueue) + indexOfWaiting(priorityQueue, entry);
-            case VIP -> countWaiting(staffQueue) + countWaiting(priorityQueue) + indexOfWaiting(vipQueue, entry);
-            case NORMAL -> countWaiting(staffQueue) + countWaiting(priorityQueue)
-                           + countWaiting(vipQueue) + indexOfWaiting(normalQueue, entry);
-        };
-    }
-
     private int countWaiting(List<QueueEntry> q) {
         int c = 0;
         for (QueueEntry e : q) if (e.state == QueueEntryState.WAITING) c++;
         return c;
     }
 
-    private int indexOfWaiting(List<QueueEntry> q, QueueEntry target) {
-        int idx = 0;
-        for (QueueEntry e : q) {
-            if (e.state != QueueEntryState.WAITING) continue;
-            if (e == target) return idx;
-            idx++;
+    private int totalWaiting() {
+        return countWaiting(staffQueue) + countWaiting(priorityQueue)
+                + countWaiting(vipQueue) + countWaiting(normalQueue);
+    }
+
+    private List<QueueEntry> buildDispatchOrder() {
+        List<QueueEntry> order = new ArrayList<>();
+
+        // Locked entry always goes first — prevents newly arriving high-priority
+        // players from displacing the person who is "next"
+        if (lockedEntry != null && lockedEntry.state == QueueEntryState.WAITING) {
+            order.add(lockedEntry);
         }
-        return idx;
+
+        for (QueueEntry e : staffQueue)
+            if (e.state == QueueEntryState.WAITING && e != lockedEntry) order.add(e);
+        for (QueueEntry e : priorityQueue)
+            if (e.state == QueueEntryState.WAITING && e != lockedEntry) order.add(e);
+
+        if (!Config.PROPORTIONAL_MODE.get()) {
+            for (QueueEntry e : vipQueue)
+                if (e.state == QueueEntryState.WAITING && e != lockedEntry) order.add(e);
+            for (QueueEntry e : normalQueue)
+                if (e.state == QueueEntryState.WAITING && e != lockedEntry) order.add(e);
+        } else {
+            simulateProportionalDispatch(order);
+        }
+
+        return order;
+    }
+
+    private void simulateProportionalDispatch(List<QueueEntry> order) {
+        int vipQuota = Config.PROPORTIONAL_VIP_COUNT.get();
+        int normalQuota = Config.PROPORTIONAL_NORMAL_COUNT.get();
+        boolean vipPhase = proportionalVipPhase;
+        int phaseCount = proportionalPhaseCount;
+        int skipped = skippedNormalCount;
+        boolean canAdmitNormalNow = canAdmitNormal();
+
+        List<QueueEntry> vipRemaining = new ArrayList<>();
+        for (QueueEntry e : vipQueue)
+            if (e.state == QueueEntryState.WAITING && e != lockedEntry) vipRemaining.add(e);
+        List<QueueEntry> normalRemaining = new ArrayList<>();
+        for (QueueEntry e : normalQueue)
+            if (e.state == QueueEntryState.WAITING && e != lockedEntry) normalRemaining.add(e);
+
+        int maxIter = vipRemaining.size() + normalRemaining.size() + 10;
+        while ((!vipRemaining.isEmpty() || !normalRemaining.isEmpty()) && maxIter-- > 0) {
+            if (skipped > 0) {
+                QueueEntry oldest = null;
+                boolean fromVip = false;
+                for (QueueEntry e : vipRemaining) {
+                    if (oldest == null || e.joinOrder < oldest.joinOrder) {
+                        oldest = e;
+                        fromVip = true;
+                    }
+                }
+                if (canAdmitNormalNow) {
+                    for (QueueEntry e : normalRemaining) {
+                        if (oldest == null || e.joinOrder < oldest.joinOrder) {
+                            oldest = e;
+                            fromVip = false;
+                        }
+                    }
+                }
+                if (oldest != null) {
+                    order.add(oldest);
+                    if (fromVip) vipRemaining.remove(oldest);
+                    else { normalRemaining.remove(oldest); skipped--; }
+                    continue;
+                }
+            }
+
+            if (vipPhase) {
+                if (phaseCount < vipQuota && !vipRemaining.isEmpty()) {
+                    order.add(vipRemaining.remove(0));
+                    phaseCount++;
+                    continue;
+                }
+                vipPhase = false;
+                phaseCount = 0;
+            }
+
+            if (!vipPhase) {
+                if (phaseCount < normalQuota && !normalRemaining.isEmpty()) {
+                    if (canAdmitNormalNow) {
+                        order.add(normalRemaining.remove(0));
+                        phaseCount++;
+                        continue;
+                    } else if (!vipRemaining.isEmpty()) {
+                        skipped++;
+                        vipPhase = true;
+                        phaseCount = 0;
+                        continue;
+                    }
+                }
+                if (phaseCount >= normalQuota || normalRemaining.isEmpty()) {
+                    vipPhase = true;
+                    phaseCount = 0;
+                    continue;
+                }
+            }
+
+            if (vipPhase && vipRemaining.isEmpty() && !normalRemaining.isEmpty()) {
+                if (canAdmitNormalNow) { vipPhase = false; phaseCount = 0; }
+                else { order.addAll(normalRemaining); normalRemaining.clear(); }
+            } else if (!vipPhase && normalRemaining.isEmpty() && !vipRemaining.isEmpty()) {
+                vipPhase = true; phaseCount = 0;
+            } else if (vipRemaining.isEmpty() && normalRemaining.isEmpty()) {
+                break;
+            }
+        }
     }
 
     private void broadcastPositions() {
+        List<QueueEntry> dispatchOrder = buildDispatchOrder();
         for (QueueEntry e : allQueued()) {
-            if (e.state == QueueEntryState.WAITING) sendStatus(e);
+            if (e.state == QueueEntryState.WAITING) sendStatus(e, dispatchOrder);
         }
     }
 
     private void sendStatus(QueueEntry entry) {
-        int ahead = computeAhead(entry);
-        int total = countWaiting(staffQueue) + countWaiting(priorityQueue)
-                    + countWaiting(vipQueue) + countWaiting(normalQueue);
+        sendStatus(entry, buildDispatchOrder());
+    }
+
+    private void sendStatus(QueueEntry entry, List<QueueEntry> dispatchOrder) {
+        // Compute ahead from dispatch order for consistency with per-queue breakdown
+        int ahead = 0;
+        int vAhead = 0, nAhead = 0;
+        for (QueueEntry e : dispatchOrder) {
+            if (e == entry) break;
+            ahead++;
+            if (e.staff || e.vip) vAhead++; else nAhead++;
+        }
+        int total = totalWaiting();
         int position = ahead + 1;
         int eta = 0;
         if (ahead > 0) {
             if (Config.PROPORTIONAL_MODE.get()) {
                 eta = (ahead * Config.NORMAL_ADMIT_INTERVAL_TICKS.get()) / 20;
             } else {
-                int v = 0, n = 0;
-                for (QueueEntry e : allQueued()) {
-                    if (e.state != QueueEntryState.WAITING) continue;
-                    if (e == entry) break;
-                    if (e.staff || e.vip) v++; else n++;
-                }
-                eta = (v * Config.VIP_ADMIT_INTERVAL_TICKS.get()
-                       + n * Config.NORMAL_ADMIT_INTERVAL_TICKS.get()) / 20;
+                eta = (vAhead * Config.VIP_ADMIT_INTERVAL_TICKS.get()
+                       + nAhead * Config.NORMAL_ADMIT_INTERVAL_TICKS.get()) / 20;
             }
         }
-        var payload = new QueuePayloads.QueueStatusPayload(position, total, ahead, false, paused, eta, false);
+
+        boolean showDetail = Config.SHOW_QUEUE_DETAIL.get();
+        boolean staffBypassQueue = Config.STAFF_BYPASS_QUEUE.get();
+        int totalStaff = 0, totalPriority = 0, totalVip = 0, totalNormal = 0;
+        int aheadStaff = 0, aheadPriority = 0, aheadVip = 0, aheadNormal = 0;
+
+        if (showDetail) {
+            totalStaff = countWaiting(staffQueue);
+            totalPriority = countWaiting(priorityQueue);
+            totalVip = countWaiting(vipQueue);
+            totalNormal = countWaiting(normalQueue);
+
+            for (QueueEntry e : dispatchOrder) {
+                if (e == entry) break;
+                switch (e.queueType) {
+                    case STAFF -> aheadStaff++;
+                    case PRIORITY -> aheadPriority++;
+                    case VIP -> aheadVip++;
+                    case NORMAL -> aheadNormal++;
+                }
+            }
+        }
+
+        // Lock: first person in line cannot be displaced by new arrivals
+        if (ahead == 0 && lockedEntry == null) {
+            lockedEntry = entry;
+        }
+
+        var payload = new QueuePayloads.QueueStatusPayload(
+                position, total, ahead, false, paused, eta, false,
+                showDetail, staffBypassQueue,
+                totalStaff, totalPriority, totalVip, totalNormal,
+                aheadStaff, aheadPriority, aheadVip, aheadNormal,
+                entry.queueType.ordinal());
         if (entry.connection.isConnected())
             entry.connection.send(new ClientboundCustomPayloadPacket(payload));
     }

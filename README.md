@@ -25,10 +25,12 @@ SmartQueue replaces vanilla Minecraft's "Server Full" rejection with a configura
 - **VIP exclusive slots** — reserve a portion of server capacity exclusively for VIP players, ensuring premium users can always get in
 - **Staff exclusive slots** — when staff bypass queue is enabled, extra slots can be added on top of `effective_max_players` exclusively for staff, so staff joining doesn't consume normal player capacity
 - **Real-time queue screen** — position, total queued, players ahead, estimated wait time
+- **Queue detail display** — per-queue breakdown showing total and ahead counts for each queue (Staff, Priority Rejoin, VIP, Normal), configurable on/off; real-time updates reflecting actual dispatch order including proportional mode and anti-imbalance state
 - **Priority tiers** — Staff (highest), VIP, and Normal players, with configurable admission modes
 - **Proportional admission mode** — optional ratio-based admission (e.g., "3 VIPs then 2 normals") with anti-imbalance protection to prevent normals from being starved
 - **Four independent queues** — Staff, Priority Rejoin, VIP, and Normal queues with strict admission order
 - **Rejoin with position recovery** — disconnect and come back within the grace window to keep your place in line
+- **Rejoin rate limiting** — configurable limit on how many times a player can use priority rejoin within a time window, preventing abuse of the rejoin system
 - **Disconnect position hold** — briefly disconnected queue players hold their position for a configurable grace period; reconnect seamlessly without losing their spot or shifting other players' positions
 - **Automatic slot refill** — safety net on every tick ensures no slot stays empty when players are waiting
 - **Pause / resume** — freeze the queue during maintenance without kicking anyone
@@ -182,6 +184,10 @@ All values are under the `[queue]` section.
 | `proportional_vip_count` | int | `2` | 1–100 | Number of VIP players to admit per proportional cycle. Only used when `proportional_mode = true`. |
 | `proportional_normal_count` | int | `1` | 1–100 | Number of normal players to admit per proportional cycle. Only used when `proportional_mode = true`. |
 | `staff_see_detailed_status` | bool | `true` | — | Whether non-OP staff members can see detailed queue status including player names and identity tags. OPs (permission level 2+) always see the full view regardless. When `false`, staff see the same simplified view as regular players. |
+| `show_queue_detail` | bool | `true` | — | Show detailed queue breakdown to clients. When `true`, queued players see how many people are in each queue (Staff, Priority Rejoin, VIP, Normal) and how many of each are ahead of them according to actual dispatch order. When `false`, clients see only the simple position number. If `staff_bypass_queue` is `true`, the Staff queue row is hidden from clients. |
+| `rejoin_rate_limit_enabled` | bool | `false` | — | Enable rejoin rate limiting. When `true`, players who repeatedly use priority rejoin to skip the queue are rate-limited: if they exceed `rejoin_rate_limit_max_count` rejoins within `rejoin_rate_limit_window_ticks`, subsequent rejoins are treated as new connections (no priority). The counter resets when the rejoin chain is broken (player fails to rejoin within the grace period). |
+| `rejoin_rate_limit_window_ticks` | int | `36000` | 1–1728000 | Time window in ticks for rejoin rate limiting. Default: 36000 ticks = 30 minutes. |
+| `rejoin_rate_limit_max_count` | int | `3` | 1–1000 | Maximum priority rejoins allowed within the rate limit window. Default: 3. |
 
 ### `smartqueue-staff.toml`
 
@@ -356,9 +362,16 @@ When a player connects and the server is full, they see:
 ┌──────────────────────────────────────┐
 │         Server Queue                 │
 │                                      │
-│    Position: 3 / 12                  │
-│    2 player(s) ahead of you          │
-│    ETA: 45s                          │
+│    Position: 5 / 16                  │
+│                                      │
+│    --- Queue Overview ---            │
+│    Staff:     1 total, 0 ahead       │
+│    Priority:  1 total, 0 ahead       │
+│    VIP:       3 total, 2 ahead       │
+│    Normal:    6 total, 2 ahead       │
+│                                      │
+│    4 player(s) ahead of you          │
+│    ETA: 35s                          │
 │                                      │
 │    Please wait, you are in the       │
 │    queue.                            │
@@ -370,6 +383,7 @@ When a player connects and the server is full, they see:
 ```
 
 - Position updates in real-time as players are admitted or leave
+- When `show_queue_detail = true`, a per-queue breakdown shows how many people are in each queue (total) and how many of each type are ahead of you (according to actual dispatch order)
 - ETA is calculated dynamically based on the mix of Staff/VIP/Normal players ahead
 - When paused, the title changes to "Server Queue [PAUSED]" and a red pause notice appears
 - "You are next!" (green) replaces the ahead count when the player reaches position 1

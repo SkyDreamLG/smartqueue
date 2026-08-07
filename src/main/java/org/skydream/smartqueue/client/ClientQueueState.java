@@ -35,6 +35,11 @@ public final class ClientQueueState {
     private static int total = 0;
     private static int ahead = 0;
     private static int etaSeconds = 0;
+    private static boolean showDetail = false;
+    private static boolean staffBypassQueue = false;
+    private static int totalStaff = 0, totalPriority = 0, totalVip = 0, totalNormal = 0;
+    private static int aheadStaff = 0, aheadPriority = 0, aheadVip = 0, aheadNormal = 0;
+    private static int playerQueueOrdinal = 0;
 
     private static Connection capturedConnection;
     private static long lastPacketTime;
@@ -90,6 +95,17 @@ public final class ClientQueueState {
         total = payload.total();
         ahead = payload.ahead();
         etaSeconds = payload.etaSeconds();
+        showDetail = payload.showDetail();
+        staffBypassQueue = payload.staffBypassQueue();
+        totalStaff = payload.totalStaff();
+        totalPriority = payload.totalPriority();
+        totalVip = payload.totalVip();
+        totalNormal = payload.totalNormal();
+        aheadStaff = payload.aheadStaff();
+        aheadPriority = payload.aheadPriority();
+        aheadVip = payload.aheadVip();
+        aheadNormal = payload.aheadNormal();
+        playerQueueOrdinal = payload.playerQueueOrdinal();
         LOGGER.debug("update() state updated: position={}, total={}, ahead={}, eta={}, paused={}",
                 position, total, ahead, etaSeconds, paused);
         if (firstJoin) playSound(SOUND_JOIN_QUEUE);
@@ -192,6 +208,17 @@ public final class ClientQueueState {
     public static int getTotal() { return total; }
     public static int getAhead() { return ahead; }
     public static int getEtaSeconds() { return etaSeconds; }
+    public static boolean isShowDetail() { return showDetail; }
+    public static boolean isStaffBypassQueue() { return staffBypassQueue; }
+    public static int getTotalStaff() { return totalStaff; }
+    public static int getTotalPriority() { return totalPriority; }
+    public static int getTotalVip() { return totalVip; }
+    public static int getTotalNormal() { return totalNormal; }
+    public static int getAheadStaff() { return aheadStaff; }
+    public static int getAheadPriority() { return aheadPriority; }
+    public static int getAheadVip() { return aheadVip; }
+    public static int getAheadNormal() { return aheadNormal; }
+    public static int getPlayerQueueOrdinal() { return playerQueueOrdinal; }
 
     private static void playSound(SoundEvent sound) {
         Minecraft.getInstance().getSoundManager().play(
@@ -209,6 +236,11 @@ public final class ClientQueueState {
         total = 0;
         ahead = 0;
         etaSeconds = 0;
+        showDetail = false;
+        staffBypassQueue = false;
+        totalStaff = 0; totalPriority = 0; totalVip = 0; totalNormal = 0;
+        aheadStaff = 0; aheadPriority = 0; aheadVip = 0; aheadNormal = 0;
+        playerQueueOrdinal = 0;
         capturedConnection = null;
         lastPacketTime = 0;
         connectionLost = false;

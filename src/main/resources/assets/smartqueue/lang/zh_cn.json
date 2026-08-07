@@ -16,6 +16,11 @@
   "smartqueue.screen.left": "已离开队列",
   "smartqueue.screen.connection_lost": "[!] 服务器连接异常 — 等待恢复中...",
   "smartqueue.screen.server_lost": "与服务器的连接已断开",
+  "smartqueue.screen.queue_detail_header": "--- 队列概览 ---",
+  "smartqueue.screen.queue_detail_staff": "Staff:     %s人, 前方%s人",
+  "smartqueue.screen.queue_detail_priority": "优先重连:  %s人, 前方%s人",
+  "smartqueue.screen.queue_detail_vip": "VIP:       %s人, 前方%s人",
+  "smartqueue.screen.queue_detail_normal": "普通:      %s人, 前方%s人",
 
   "smartqueue.command.toggle": "SmartQueue 总开关：%s",
   "smartqueue.command.state.on": "开启",

@@ -33,6 +33,10 @@ public final class Config {
     public static final ModConfigSpec.IntValue PROPORTIONAL_NORMAL_COUNT;
     public static final ModConfigSpec.IntValue QUEUE_DISCONNECT_GRACE_TICKS;
     public static final ModConfigSpec.BooleanValue STAFF_SEE_DETAILED_STATUS;
+    public static final ModConfigSpec.BooleanValue SHOW_QUEUE_DETAIL;
+    public static final ModConfigSpec.BooleanValue REJOIN_RATE_LIMIT_ENABLED;
+    public static final ModConfigSpec.IntValue REJOIN_RATE_LIMIT_WINDOW_TICKS;
+    public static final ModConfigSpec.IntValue REJOIN_RATE_LIMIT_MAX_COUNT;
 
     static {
         MAIN_BUILDER.comment("SmartQueue Main Configuration",
@@ -149,6 +153,43 @@ public final class Config {
                         "When false, staff see the same simplified view as regular players.")
                 .translation("smartqueue.config.staff_see_detailed_status")
                 .define("staff_see_detailed_status", true);
+
+        SHOW_QUEUE_DETAIL = MAIN_BUILDER
+                .comment("Show detailed queue breakdown to clients.",
+                        "When true, queued players see how many people are in each queue",
+                        "(Staff, Priority Rejoin, VIP, Normal) and how many of each are ahead of them.",
+                        "When false, clients see only the simple position number.",
+                        "If staff_bypass_queue is true, the Staff queue is hidden from clients.")
+                .translation("smartqueue.config.show_queue_detail")
+                .define("show_queue_detail", true);
+
+        REJOIN_RATE_LIMIT_ENABLED = MAIN_BUILDER
+                .comment("Enable rejoin rate limiting to prevent players from repeatedly",
+                        "using priority rejoin to skip the queue.",
+                        "When true, if a player exceeds the configured rejoin count within the",
+                        "configured time window, subsequent rejoins are treated as new connections",
+                        "(no priority). The counter resets when the rejoin chain is broken",
+                        "(player fails to rejoin within the grace period).")
+                .translation("smartqueue.config.rejoin_rate_limit_enabled")
+                .define("rejoin_rate_limit_enabled", false);
+
+        REJOIN_RATE_LIMIT_WINDOW_TICKS = MAIN_BUILDER
+                .comment("Time window in server ticks for rejoin rate limiting.",
+                        "When checking if a player exceeds the rejoin limit, only rejoins",
+                        "within this many ticks before the current time are counted.",
+                        "Default: 36000 ticks = 30 minutes.",
+                        "Only used when rejoin_rate_limit_enabled is true.")
+                .translation("smartqueue.config.rejoin_rate_limit_window_ticks")
+                .defineInRange("rejoin_rate_limit_window_ticks", 36000, 1, 1728000);
+
+        REJOIN_RATE_LIMIT_MAX_COUNT = MAIN_BUILDER
+                .comment("Maximum number of priority rejoins allowed within the rate limit window.",
+                        "If a player exceeds this count, subsequent rejoins within the window",
+                        "are treated as new connections (placed in VIP or Normal queue).",
+                        "Default: 3.",
+                        "Only used when rejoin_rate_limit_enabled is true.")
+                .translation("smartqueue.config.rejoin_rate_limit_max_count")
+                .defineInRange("rejoin_rate_limit_max_count", 3, 1, 1000);
         MAIN_BUILDER.pop();
 
         MAIN_SPEC = MAIN_BUILDER.build();

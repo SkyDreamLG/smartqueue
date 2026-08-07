@@ -12,7 +12,11 @@ public final class QueuePayloads {
     private QueuePayloads() {}
 
     public record QueueStatusPayload(int position, int total, int ahead, boolean admitted, boolean paused,
-                                     int etaSeconds, boolean rejected)
+                                     int etaSeconds, boolean rejected,
+                                     boolean showDetail, boolean staffBypassQueue,
+                                     int totalStaff, int totalPriority, int totalVip, int totalNormal,
+                                     int aheadStaff, int aheadPriority, int aheadVip, int aheadNormal,
+                                     int playerQueueOrdinal)
             implements CustomPacketPayload {
 
         public static final Type<QueueStatusPayload> TYPE =
@@ -28,6 +32,17 @@ public final class QueuePayloads {
                             buf.writeBoolean(payload.paused);
                             buf.writeVarInt(payload.etaSeconds);
                             buf.writeBoolean(payload.rejected);
+                            buf.writeBoolean(payload.showDetail);
+                            buf.writeBoolean(payload.staffBypassQueue);
+                            buf.writeVarInt(payload.totalStaff);
+                            buf.writeVarInt(payload.totalPriority);
+                            buf.writeVarInt(payload.totalVip);
+                            buf.writeVarInt(payload.totalNormal);
+                            buf.writeVarInt(payload.aheadStaff);
+                            buf.writeVarInt(payload.aheadPriority);
+                            buf.writeVarInt(payload.aheadVip);
+                            buf.writeVarInt(payload.aheadNormal);
+                            buf.writeVarInt(payload.playerQueueOrdinal);
                         },
                         buf -> new QueueStatusPayload(
                                 buf.readVarInt(),
@@ -36,7 +51,18 @@ public final class QueuePayloads {
                                 buf.readBoolean(),
                                 buf.readBoolean(),
                                 buf.readVarInt(),
-                                buf.readBoolean()
+                                buf.readBoolean(),
+                                buf.readBoolean(),
+                                buf.readBoolean(),
+                                buf.readVarInt(),
+                                buf.readVarInt(),
+                                buf.readVarInt(),
+                                buf.readVarInt(),
+                                buf.readVarInt(),
+                                buf.readVarInt(),
+                                buf.readVarInt(),
+                                buf.readVarInt(),
+                                buf.readVarInt()
                         )
                 );
 

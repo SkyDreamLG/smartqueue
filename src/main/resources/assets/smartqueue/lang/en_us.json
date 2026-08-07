@@ -16,6 +16,11 @@
   "smartqueue.screen.left": "Left the queue",
   "smartqueue.screen.connection_lost": "[!] Server connection lost — waiting for recovery...",
   "smartqueue.screen.server_lost": "Server connection lost",
+  "smartqueue.screen.queue_detail_header": "--- Queue Overview ---",
+  "smartqueue.screen.queue_detail_staff": "Staff:     %s total, %s ahead",
+  "smartqueue.screen.queue_detail_priority": "Priority:  %s total, %s ahead",
+  "smartqueue.screen.queue_detail_vip": "VIP:       %s total, %s ahead",
+  "smartqueue.screen.queue_detail_normal": "Normal:    %s total, %s ahead",
 
   "smartqueue.command.toggle": "SmartQueue master switch: %s",
   "smartqueue.command.state.on": "ON",
