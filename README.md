@@ -23,6 +23,7 @@ SmartQueue replaces vanilla Minecraft's "Server Full" rejection with a configura
 
 - **Configurable player cap** — set `effective_max_players` lower than `server.properties max-players` to reserve slots or enforce queueing
 - **VIP exclusive slots** — reserve a portion of server capacity exclusively for VIP players, ensuring premium users can always get in
+- **Staff exclusive slots** — when staff bypass queue is enabled, extra slots can be added on top of `effective_max_players` exclusively for staff, so staff joining doesn't consume normal player capacity
 - **Real-time queue screen** — position, total queued, players ahead, estimated wait time
 - **Priority tiers** — Staff (highest), VIP, and Normal players, with configurable admission modes
 - **Proportional admission mode** — optional ratio-based admission (e.g., "3 VIPs then 2 normals") with anti-imbalance protection to prevent normals from being starved
@@ -51,7 +52,7 @@ SmartQueue requires installation on **both the server and the client**. The serv
 
 ### Server & Client
 
-1. Download the latest `smartqueue-1.0.0.jar` from [Releases](#).
+1. Download the latest `smartqueue-1.5.0-NeoForge-1.21.1.jar` from [Releases](#).
 2. Place it in **both** the server's `mods/` directory and each player's client `mods/` directory.
 3. Start the server. Three config files will be generated in `config/`:
    - `smartqueue-server.toml` — queue settings
@@ -173,7 +174,9 @@ All values are under the `[queue]` section.
 | `vip_admit_interval_ticks` | int | `40` | 1–72000 | Ticks between admitting each Staff/VIP player (default: 2 s). |
 | `rejoin_grace_ticks` | int | `6000` | 0–1728000 | Time window for WAS_PLAYING rejoin: a player who was in the game, disconnects, and reconnects to a full server gets Priority Rejoin queue placement. 0 = disabled. Default: 6000 ticks (5 minutes). |
 | `queue_disconnect_grace_ticks` | int | `6000` | 0–72000 | Time in ticks a disconnected queue player's position is held in place. Reconnect within this window to resume seamlessly. Expired entries are permanently removed. 0 = immediate removal (no position hold). Default: 6000 ticks (5 minutes). |
-| `staff_bypass_queue` | bool | `false` | — | Staff behavior when the server is full. `false` = staff enter the queue at the front (priority insert). `true` = staff skip the queue entirely and join directly. **When `true`, ensure `effective_max_players` is lower than `server.properties max-players`** to reserve slots for staff. |
+| `staff_bypass_queue` | bool | `false` | — | Staff behavior when the server is full. `false` = staff enter the queue at the front (priority insert). `true` = staff skip the queue entirely and join directly. **When `true`, ensure `effective_max_players` is lower than `server.properties max-players`** to reserve slots for staff. Consider using `staff_exclusive_slots` (see below) instead of lowering `effective_max_players`. |
+| `staff_exclusive_slots` | bool | `false` | — | Enable staff-exclusive extra slots. Only takes effect when `staff_bypass_queue = true`. When enabled, the first N staff players (set by `staff_exclusive_slots_count`) do NOT count toward `effective_max_players`, allowing extra capacity for staff without reducing normal player slots. |
+| `staff_exclusive_slots_count` | int | `2` | 0–1024 | Number of staff-exclusive extra slots. Only used when `staff_exclusive_slots = true`. When > 0, up to this many staff don't count toward `effective_max_players`. When `0`, staff have unlimited exclusive slots (constrained only by `server.properties max-players`). Staff beyond this count still bypass the queue but occupy normal player slots. |
 | `vip_exclusive_slots` | int | `0` | 0–1024 | Number of slots reserved exclusively for VIP users. When > 0, non-VIP players are capped at `effective_max_players - vip_exclusive_slots`. The remaining slots can only be filled by VIP (and staff, when `staff_bypass_queue=false`). Example: `effective_max_players=35`, `vip_exclusive_slots=5` → non-VIP cap is 30. If misconfigured higher than `effective_max_players`, the value is clamped automatically. |
 | `proportional_mode` | bool | `false` | — | Enable proportional admission mode. When `true`, VIP and normal players are admitted in a configurable ratio (e.g., 3 VIPs then 1 normal, alternating). Staff are always admitted first regardless. When `false`, the legacy dual-timer mode is used (VIPs and normals each have their own independent admission interval). |
 | `proportional_vip_count` | int | `2` | 1–100 | Number of VIP players to admit per proportional cycle. Only used when `proportional_mode = true`. |
@@ -267,18 +270,20 @@ When `staff_bypass_queue = true`, staff players skip the queue entirely and join
 
 **Important:** SmartQueue's `canPlayerLogin` mixin suppresses vanilla's "Server Full" rejection. This means staff can push the server beyond `server.properties max-players`. For example, with `max-players=32`, 32 players online, and a staff member joining — the server would reach **33/32** players.
 
-**Recommendation:** Always set `effective_max_players` at least 1–2 slots lower than `server.properties max-players` when using this option. For example:
+**Recommendation:** Use `staff_exclusive_slots` (see below) to add dedicated extra slots for staff without reducing normal player capacity. If not using exclusive slots, always set `effective_max_players` at least 1–2 slots lower than `server.properties max-players`. For example:
 
 ```
 # server.properties
-max-players = 32
+max-players = 34
 
 # smartqueue-server.toml
-effective_max_players = 30
+effective_max_players = 32
 staff_bypass_queue = true
+staff_exclusive_slots = true
+staff_exclusive_slots_count = 2
 ```
 
-This reserves 2 slots for staff, ensuring they never need to exceed the vanilla limit.
+With this setup: 32 normal slots + 2 staff-exclusive slots = 34 max, staff don't reduce normal capacity, and `server.properties max-players` (set to 34) is never exceeded.
 
 ### VIP Exclusive Slots
 
@@ -298,6 +303,29 @@ When `vip_exclusive_slots` is set to a value greater than 0, a portion of the se
 - `staff_bypass_queue = true`: Only VIP players count toward VIP-exclusive slots. Staff bypass the queue entirely and do not affect VIP slot counting (but they do occupy a regular slot on the server).
 
 **Auto-clamping:** If `vip_exclusive_slots` is accidentally set higher than `effective_max_players`, it is automatically clamped to `effective_max_players` (treating all slots as VIP-exclusive) to prevent misconfiguration.
+
+### Staff Exclusive Slots
+
+When `staff_bypass_queue = true` and `staff_exclusive_slots = true`, the server can host extra staff players **without reducing normal player capacity**. The first N staff players (configured by `staff_exclusive_slots_count`) occupy dedicated extra slots on top of `effective_max_players`.
+
+**How it works — example:** `effective_max_players = 32`, `staff_exclusive_slots_count = 2`
+
+| Scenario | Non-Staff online | Staff online | Actual players | Non-staff joins? | Staff joins? |
+|---|---|---|---|---|---|
+| Server not full | 25 | 1 | 26 | Yes (25 < 32) | Yes (bypass) |
+| Non-staff at cap | 32 | 0 | 32 | **Queued** | Yes (bypass, uses slot 1/2) |
+| Staff in exclusive slots | 32 | 2 | 34 | **Queued** (non-staff=32) | Yes (bypass, but occupies a normal slot) |
+| With VIP exclusive | 27 + 5VIP | 2 | 34 | **Queued** (non-VIP=27=limit) | Yes (bypass) |
+
+**Key behaviors:**
+
+- **Normal players** see `effective_max_players` as the server limit (e.g., 32) — staff-exclusive slots are invisible to them
+- **OPs and staff** (when `staff_see_detailed_status = true`) see annotated capacity like `32 (+2 Staff exclusive)` and detailed staff slot usage
+- **`staff_exclusive_slots_count = 0`** means **unlimited** staff exclusive slots — all staff are uncapped (constrained only by `server.properties max-players`)
+- Staff beyond the exclusive slot count still bypass the queue but **occupy a normal slot**, reducing capacity for regular players
+- Staff in exclusive slots do NOT count toward VIP exclusive slot occupancy — the two mechanisms are independent
+
+**Recommendation:** Set `server.properties max-players` to at least `effective_max_players + staff_exclusive_slots_count` to ensure the vanilla limit doesn't block staff.
 
 ## Disconnect & Rejoin
 
@@ -469,7 +497,7 @@ cd smartqueue
 ./gradlew build
 ```
 
-The compiled jar will be at `build/libs/smartqueue-1.0.0.jar`.
+The compiled jar will be at `build/libs/smartqueue-1.5.0-NeoForge-1.21.1.jar`.
 
 ### Development
 

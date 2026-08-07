@@ -25,6 +25,8 @@ public final class Config {
     public static final ModConfigSpec.IntValue VIP_ADMIT_INTERVAL_TICKS;
     public static final ModConfigSpec.IntValue REJOIN_GRACE_TICKS;
     public static final ModConfigSpec.BooleanValue STAFF_BYPASS_QUEUE;
+    public static final ModConfigSpec.BooleanValue STAFF_EXCLUSIVE_SLOTS;
+    public static final ModConfigSpec.IntValue STAFF_EXCLUSIVE_SLOTS_COUNT;
     public static final ModConfigSpec.IntValue VIP_EXCLUSIVE_SLOTS;
     public static final ModConfigSpec.BooleanValue PROPORTIONAL_MODE;
     public static final ModConfigSpec.IntValue PROPORTIONAL_VIP_COUNT;
@@ -91,6 +93,24 @@ public final class Config {
                         "Otherwise staff may push the server beyond the vanilla player limit.")
                 .translation("smartqueue.config.staff_bypass_queue")
                 .define("staff_bypass_queue", false);
+
+        STAFF_EXCLUSIVE_SLOTS = MAIN_BUILDER
+                .comment("Enable staff-exclusive extra slots. Only takes effect when staff_bypass_queue is true.",
+                        "When true, the first N staff players (set by staff_exclusive_slots_count) do NOT",
+                        "count toward effective_max_players, allowing extra capacity for staff.",
+                        "When false, staff occupy normal slots like any other player.",
+                        "Example: effective_max_players=32, staff_exclusive_slots_count=2 →",
+                        "server can hold up to 34 players, with the extra 2 reserved for staff.")
+                .translation("smartqueue.config.staff_exclusive_slots")
+                .define("staff_exclusive_slots", false);
+
+        STAFF_EXCLUSIVE_SLOTS_COUNT = MAIN_BUILDER
+                .comment("Number of staff-exclusive extra slots. Only used when staff_exclusive_slots is true.",
+                        "When > 0, up to this many staff players don't count toward effective_max_players.",
+                        "When 0, staff have UNLIMITED exclusive slots (constrained only by server.properties).",
+                        "Staff beyond this count still bypass the queue but occupy normal player slots.")
+                .translation("smartqueue.config.staff_exclusive_slots_count")
+                .defineInRange("staff_exclusive_slots_count", 2, 0, 1024);
 
         VIP_EXCLUSIVE_SLOTS = MAIN_BUILDER
                 .comment("Number of player slots reserved exclusively for VIP users.",

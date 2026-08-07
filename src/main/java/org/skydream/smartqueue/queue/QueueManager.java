@@ -110,6 +110,10 @@ public final class QueueManager {
             }
         }
 
+        if (isStaffExclusiveEnabled()) {
+            return countNonStaffOccupiedSlots() >= effectiveMax;
+        }
+
         return activeCount() >= effectiveMax;
     }
 
@@ -295,7 +299,7 @@ public final class QueueManager {
         if (instance.paused) return;
 
         // Safety net: fill any open slot
-        if (instance.hasAnyQueued() && instance.activeCount() < Config.EFFECTIVE_MAX_PLAYERS.get()) {
+        if (instance.hasAnyQueued() && !instance.isServerFull()) {
             if (instance.tryAdmit()) {
                 instance.vipTimer = 0;
                 instance.normalTimer = 0;
@@ -336,7 +340,7 @@ public final class QueueManager {
     // ── Proportional admission ──
 
     private void admitNextProportional() {
-        if (activeCount() >= Config.EFFECTIVE_MAX_PLAYERS.get()) return;
+        if (isServerFull()) return;
 
         // 1. Staff always first
         if (admitFirstFrom(staffQueue)) return;
@@ -400,7 +404,7 @@ public final class QueueManager {
     // ── Legacy admission ──
 
     private void admitNextLegacy(boolean vip) {
-        if (activeCount() >= Config.EFFECTIVE_MAX_PLAYERS.get()) return;
+        if (isServerFull()) return;
         int vipSlots = effectiveVipSlots();
         if (!vip && vipSlots > 0) {
             int nonVipLimit = Config.EFFECTIVE_MAX_PLAYERS.get() - vipSlots;
@@ -522,7 +526,7 @@ public final class QueueManager {
 
     private boolean tryAdmit() {
         if (paused || !Config.ENABLED.get()) return false;
-        if (activeCount() < Config.EFFECTIVE_MAX_PLAYERS.get()) {
+        if (!isServerFull()) {
             if (admitFirstFrom(staffQueue)) return true;
             if (admitFirstFrom(priorityQueue)) return true;
             if (skippedNormalCount > 0) {
@@ -631,6 +635,49 @@ public final class QueueManager {
 
     public int effectiveVipSlots() {
         return Math.min(Config.VIP_EXCLUSIVE_SLOTS.get(), Config.EFFECTIVE_MAX_PLAYERS.get());
+    }
+
+    // ── Staff exclusive slots helpers ──
+
+    public boolean isStaffExclusiveEnabled() {
+        return Config.STAFF_BYPASS_QUEUE.get() && Config.STAFF_EXCLUSIVE_SLOTS.get();
+    }
+
+    public int countStaffOnline() {
+        if (server == null) return 0;
+        int count = 0;
+        for (ServerPlayer sp : server.getPlayerList().getPlayers()) {
+            if (isStaff(sp.getGameProfile())) count++;
+        }
+        return count;
+    }
+
+    public int getStaffInExclusiveSlots() {
+        if (!isStaffExclusiveEnabled()) return 0;
+        int staffOnline = countStaffOnline();
+        int exclusiveCount = Config.STAFF_EXCLUSIVE_SLOTS_COUNT.get();
+        if (exclusiveCount == 0) return staffOnline;
+        return Math.min(staffOnline, exclusiveCount);
+    }
+
+    public int countNonStaffOccupiedSlots() {
+        return activeCount() - getStaffInExclusiveSlots();
+    }
+
+    private boolean isServerFull() {
+        if (isStaffExclusiveEnabled()) {
+            return countNonStaffOccupiedSlots() >= Config.EFFECTIVE_MAX_PLAYERS.get();
+        }
+        return activeCount() >= Config.EFFECTIVE_MAX_PLAYERS.get();
+    }
+
+    public int getDisplayMaxPlayers() {
+        return Config.EFFECTIVE_MAX_PLAYERS.get();
+    }
+
+    public int getStaffExclusiveSlotsForDisplay() {
+        if (!isStaffExclusiveEnabled()) return 0;
+        return Config.STAFF_EXCLUSIVE_SLOTS_COUNT.get();
     }
 
     public int countVipEligibleOnline() {

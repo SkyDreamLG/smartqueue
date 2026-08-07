@@ -145,14 +145,35 @@ public final class QueueCommands {
         int queued = qm.queueSize();
         int effectiveMax = Config.EFFECTIVE_MAX_PLAYERS.get();
         int vipSlots = qm.effectiveVipSlots();
+        boolean staffExclusive = qm.isStaffExclusiveEnabled();
 
         ctx.getSource().sendSuccess(
                 () -> Component.translatable("smartqueue.command.status.header"), false);
         ctx.getSource().sendSuccess(
                 () -> Component.translatable("smartqueue.command.status.enabled", enabled, paused), false);
-        ctx.getSource().sendSuccess(
-                () -> Component.translatable("smartqueue.command.status.active",
-                        active, effectiveMax), false);
+
+        if (staffExclusive) {
+            int staffOnline = qm.countStaffOnline();
+            int exclusiveCount = qm.getStaffExclusiveSlotsForDisplay();
+            int nonStaffOccupied = qm.countNonStaffOccupiedSlots();
+            int usedExclusive = qm.getStaffInExclusiveSlots();
+            ctx.getSource().sendSuccess(
+                    () -> Component.translatable("smartqueue.command.status.active_staff_exclusive",
+                            active, effectiveMax, nonStaffOccupied, exclusiveCount), false);
+            if (exclusiveCount == 0) {
+                ctx.getSource().sendSuccess(
+                        () -> Component.translatable("smartqueue.command.status.staff_exclusive_unlimited",
+                                staffOnline), false);
+            } else {
+                ctx.getSource().sendSuccess(
+                        () -> Component.translatable("smartqueue.command.status.staff_exclusive",
+                                exclusiveCount, staffOnline, usedExclusive), false);
+            }
+        } else {
+            ctx.getSource().sendSuccess(
+                    () -> Component.translatable("smartqueue.command.status.active",
+                            active, effectiveMax), false);
+        }
 
         if (proportional) {
             int vipRatio = Config.PROPORTIONAL_VIP_COUNT.get();

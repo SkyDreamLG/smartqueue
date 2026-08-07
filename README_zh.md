@@ -23,6 +23,7 @@ SmartQueue 用一套可配置的、带优先级的排队系统替代了原版 Mi
 
 - **可配置的玩家上限** — 将 `effective_max_players` 设得比 `server.properties max-players` 更低，预留管理员通道或强制启用排队
 - **VIP 专属槽位** — 将部分服务器名额预留给 VIP 玩家，确保赞助玩家始终能够进入
+- **Staff 专属槽位** — 在 Staff 跳过排队模式下，可在有效上限之上额外增加 Staff 专属容量，Staff 加入不占用普通玩家名额
 - **实时排队界面** — 显示当前位置、排队总人数、前方等待人数、预计等待时间
 - **优先级分级** — Staff（最高优先级）、VIP、普通玩家，支持可配置的放行模式
 - **比例放行模式** — 可选的比例放行（如"3个VIP后放2个普通"），配合防失衡保护，防止普通玩家被无限插队
@@ -51,7 +52,7 @@ SmartQueue **需要同时安装在服务端和客户端**。服务端处理排�
 
 ### 服务端 & 客户端
 
-1. 从 [Releases](#) 下载最新的 `smartqueue-1.0.0.jar`
+1. 从 [Releases](#) 下载最新的 `smartqueue-1.5.0-NeoForge-1.21.1.jar`
 2. 分别放入**服务端**的 `mods/` 目录和**每个玩家客户端**的 `mods/` 目录
 3. 启动服务器。`config/` 目录下会自动生成三个配置文件：
    - `smartqueue-server.toml` — 排队参数设置
@@ -173,7 +174,9 @@ SmartQueue 支持两种放行模式，通过 `proportional_mode` 配置项切换
 | `vip_admit_interval_ticks` | int | `40` | 1–72000 | 每放行一个 Staff/VIP 玩家的间隔 tick 数（默认 2 秒放一个）。 |
 | `rejoin_grace_ticks` | int | `6000` | 0–1728000 | WAS_PLAYING 重连宽限时间：正在游戏中的玩家断线后重连服务器已满时，进入优先重连队列。0 = 禁用。默认 6000 tick（5 分钟）。 |
 | `queue_disconnect_grace_ticks` | int | `6000` | 0–72000 | 排队玩家断线后保留其队列位置的时长（tick）。在此期间重连可无缝恢复位置。超时后永久移除。0 = 立即移除（不保留位置）。默认 6000 tick（5 分钟）。 |
-| `staff_bypass_queue` | bool | `false` | — | Staff 在服务器满时的行为。`false`（默认）= Staff 进入队列但排到最前面（插队）。`true` = Staff 完全跳过排队直接进入。**设为 `true` 时，请确保 `effective_max_players` 低于 `server.properties max-players`**，为 staff 预留直接进入的容量。 |
+| `staff_bypass_queue` | bool | `false` | — | Staff 在服务器满时的行为。`false`（默认）= Staff 进入队列但排到最前面（插队）。`true` = Staff 完全跳过排队直接进入。**设为 `true` 时，请确保 `effective_max_players` 低于 `server.properties max-players`**，为 staff 预留直接进入的容量。推荐配合 `staff_exclusive_slots`（见下方）使用，避免降低普通玩家上限。 |
+| `staff_exclusive_slots` | bool | `false` | — | 启用 Staff 专属额外槽位。仅在 `staff_bypass_queue = true` 时生效。启用后，前 N 个 Staff（由 `staff_exclusive_slots_count` 设定）不计入 `effective_max_players`，在不减少普通玩家容量的前提下为 Staff 提供额外通道。 |
+| `staff_exclusive_slots_count` | int | `2` | 0–1024 | Staff 专属额外槽位数量。仅在 `staff_exclusive_slots = true` 时使用。> 0 时，最多这么多 Staff 不计入上限。设为 `0` 表示无限（仅受 `server.properties max-players` 限制）。超出此数量的 Staff 仍可跳过排队，但会占用普通槽位。 |
 | `vip_exclusive_slots` | int | `0` | 0–1024 | 为 VIP 玩家保留的专属槽位数量。> 0 时，普通玩家上限 = `effective_max_players - vip_exclusive_slots`。剩余槽位仅供 VIP（以及 `staff_bypass_queue=false` 时的 staff）使用。示例：`effective_max_players=35`, `vip_exclusive_slots=5` → 普通玩家上限为 30 人。若误设为大于 `effective_max_players` 的值，会自动钳制为有效上限。 |
 | `proportional_mode` | bool | `false` | — | 启用比例放行模式。设为 `true` 时，VIP 和普通玩家按可配置的比例交替放行（如每放 3 个 VIP 后放 1 个普通，循环往复）。Staff 不受比例限制，始终最先放行。设为 `false` 时使用传统的双计时器模式（VIP 和普通各自有独立的放行间隔）。 |
 | `proportional_vip_count` | int | `2` | 1–100 | 每个比例周期放行的 VIP 数量。仅在 `proportional_mode = true` 时生效。 |
@@ -267,18 +270,20 @@ SmartQueue 维护四个独立队列。放行顺序严格按以下优先级：
 
 **重要警告：** SmartQueue 的 `canPlayerLogin` Mixin 会压制原版的"服务器已满"拒绝。这意味着 Staff 可能让服务器超过 `server.properties max-players` 的限制。例如，`max-players=32`，已有 32 人在线，此时 Staff 加入 — 服务器会达到 **33/32** 人。
 
-**建议：** 使用此选项时，始终将 `effective_max_players` 设得比 `server.properties max-players` 低 1–2 个位置。例如：
+**建议：** 推荐使用 `staff_exclusive_slots`（见下方）为 Staff 增加专属容量，无需降低普通玩家上限即可解决问题。如果不使用专属槽位，则始终将 `effective_max_players` 设得比 `server.properties max-players` 低 1–2 个位置。推荐配置：
 
 ```
 # server.properties
-max-players = 32
+max-players = 34
 
 # smartqueue-server.toml
-effective_max_players = 30
+effective_max_players = 32
 staff_bypass_queue = true
+staff_exclusive_slots = true
+staff_exclusive_slots_count = 2
 ```
 
-这样预留了 2 个位置给 Staff，他们永远不会超出原版人数上限。
+此配置下：32 个普通槽位 + 2 个 Staff 专属槽位 = 34 人上限，Staff 不减普通容量，且不超过 `server.properties max-players`（设为 34）。
 
 ### VIP 专属槽位
 
@@ -298,6 +303,29 @@ staff_bypass_queue = true
 - `staff_bypass_queue = true`：仅 VIP 玩家计入 VIP 专属槽位。Staff 完全跳过排队，不计入 VIP 槽位计数（但仍占据服务器上的一个普通位置）。
 
 **自动钳制：** 如果 `vip_exclusive_slots` 被误设为大于 `effective_max_players` 的值，会自动钳制为 `effective_max_players`（即全部槽位均为 VIP 专属），防止配置错误导致异常。
+
+### Staff 专属槽位
+
+当 `staff_bypass_queue = true` 且 `staff_exclusive_slots = true` 时，服务器可以在**不减少普通玩家容量**的前提下，额外容纳 Staff 玩家。前 N 个 Staff（由 `staff_exclusive_slots_count` 配置）占用 `effective_max_players` 之外的专属扩容槽位。
+
+**工作原理示例：** `effective_max_players = 32`, `staff_exclusive_slots_count = 2`
+
+| 场景 | 非 Staff 在线 | Staff 在线 | 实际人数 | 非 Staff 能进？ | Staff 能进？ |
+|---|---|---|---|---|---|
+| 服务器未满 | 25 | 1 | 26 | 是（25 < 32） | 是（跳过排队） |
+| 非 Staff 满额 | 32 | 0 | 32 | **排队** | 是（跳过排队，占第 1/2 个专属位） |
+| Staff 占满专属位 | 32 | 2 | 34 | **排队**（非 Staff=32） | 是（跳过排队，但占用普通槽位） |
+| 配合 VIP 专属 | 27常+5VIP | 2 | 34 | **排队**（非 VIP=27=上限） | 是（跳过排队） |
+
+**关键行为：**
+
+- **普通玩家**只看到 `effective_max_players` 作为服务器上限（如 32）— Staff 专属槽位对其不可见
+- **OP 和 Staff**（当 `staff_see_detailed_status = true` 时）看到带标注的容量如 `32（Staff专属+2）` 及详细的 Staff 槽位使用情况
+- **`staff_exclusive_slots_count = 0`** 表示 Staff 专属槽位**无限制** — 所有 Staff 均不占用普通名额（仅受 `server.properties max-players` 约束）
+- 超出专属槽位数量的 Staff 仍可跳过排队，但会**占用普通槽位**，减少普通玩家可用容量
+- Staff 专属槽位与 VIP 专属槽位**相互独立** — Staff 不占用 VIP 配额
+
+**建议：** 将 `server.properties max-players` 设为至少 `effective_max_players + staff_exclusive_slots_count`，确保原版上限不会阻止 Staff 进入。
 
 ## 断线与重连
 
@@ -467,7 +495,7 @@ cd smartqueue
 ./gradlew build
 ```
 
-编译产物位于 `build/libs/smartqueue-1.0.0.jar`。
+编译产物位于 `build/libs/smartqueue-1.5.0-NeoForge-1.21.1.jar`。
 
 ### 开发
 
