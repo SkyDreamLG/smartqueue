@@ -40,6 +40,7 @@ public final class ClientQueueState {
     private static int totalStaff = 0, totalPriority = 0, totalVip = 0, totalNormal = 0;
     private static int aheadStaff = 0, aheadPriority = 0, aheadVip = 0, aheadNormal = 0;
     private static int playerQueueOrdinal = 0;
+    private static boolean blocked = false;
 
     private static Connection capturedConnection;
     private static long lastPacketTime;
@@ -106,6 +107,7 @@ public final class ClientQueueState {
         aheadVip = payload.aheadVip();
         aheadNormal = payload.aheadNormal();
         playerQueueOrdinal = payload.playerQueueOrdinal();
+        blocked = payload.blocked();
         LOGGER.debug("update() state updated: position={}, total={}, ahead={}, eta={}, paused={}",
                 position, total, ahead, etaSeconds, paused);
         if (firstJoin) playSound(SOUND_JOIN_QUEUE);
@@ -219,6 +221,7 @@ public final class ClientQueueState {
     public static int getAheadVip() { return aheadVip; }
     public static int getAheadNormal() { return aheadNormal; }
     public static int getPlayerQueueOrdinal() { return playerQueueOrdinal; }
+    public static boolean isBlocked() { return blocked; }
 
     private static void playSound(SoundEvent sound) {
         Minecraft.getInstance().getSoundManager().play(
@@ -241,6 +244,7 @@ public final class ClientQueueState {
         totalStaff = 0; totalPriority = 0; totalVip = 0; totalNormal = 0;
         aheadStaff = 0; aheadPriority = 0; aheadVip = 0; aheadNormal = 0;
         playerQueueOrdinal = 0;
+        blocked = false;
         capturedConnection = null;
         lastPacketTime = 0;
         connectionLost = false;

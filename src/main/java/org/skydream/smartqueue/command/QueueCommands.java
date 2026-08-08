@@ -12,10 +12,13 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import org.skydream.smartqueue.Config;
 import org.skydream.smartqueue.Smartqueue;
 import org.skydream.smartqueue.queue.QueueEntry;
+import org.skydream.smartqueue.queue.QueueEntryState;
 import org.skydream.smartqueue.queue.QueueManager;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 @EventBusSubscriber(modid = Smartqueue.MODID, bus = EventBusSubscriber.Bus.GAME)
 public final class QueueCommands {
@@ -157,9 +160,13 @@ public final class QueueCommands {
             int exclusiveCount = qm.getStaffExclusiveSlotsForDisplay();
             int nonStaffOccupied = qm.countNonStaffOccupiedSlots();
             int usedExclusive = qm.getStaffInExclusiveSlots();
+            int totalCap = effectiveMax + exclusiveCount;
             ctx.getSource().sendSuccess(
-                    () -> Component.translatable("smartqueue.command.status.active_staff_exclusive",
-                            active, effectiveMax, nonStaffOccupied, exclusiveCount), false);
+                    () -> Component.translatable(
+                            exclusiveCount == 0
+                                    ? "smartqueue.command.status.active_staff_exclusive_unlimited"
+                                    : "smartqueue.command.status.active_staff_exclusive",
+                            active, totalCap, effectiveMax, exclusiveCount), false);
             if (exclusiveCount == 0) {
                 ctx.getSource().sendSuccess(
                         () -> Component.translatable("smartqueue.command.status.staff_exclusive_unlimited",
@@ -211,19 +218,51 @@ public final class QueueCommands {
         if (queued == 0) return 1;
 
         QueueEntry next = snap.nextAdmit();
+        boolean nextCertain = snap.nextAdmitCertain();
+
+        // When uncertain, find at most one VIP candidate and one Normal candidate
+        // across all queues in dispatch priority order (Priority → VIP → Normal).
+        Set<QueueEntry> candidates = Set.of();
+        if (!nextCertain) {
+            QueueEntry vipCand = null;
+            QueueEntry normalCand = null;
+            // Priority rejoin queue first (highest non-staff priority)
+            for (QueueEntry e : snap.priority()) {
+                if (e.state != QueueEntryState.WAITING) continue;
+                if (vipCand == null && (e.vip || e.staff)) vipCand = e;
+                if (normalCand == null && !e.vip && !e.staff) normalCand = e;
+            }
+            // VIP queue
+            if (vipCand == null) {
+                for (QueueEntry e : snap.vip()) {
+                    if (e.state == QueueEntryState.WAITING) { vipCand = e; break; }
+                }
+            }
+            // Normal queue
+            if (normalCand == null) {
+                for (QueueEntry e : snap.normal()) {
+                    if (e.state == QueueEntryState.WAITING) { normalCand = e; break; }
+                }
+            }
+            var set = new HashSet<QueueEntry>();
+            if (vipCand != null) set.add(vipCand);
+            if (normalCand != null) set.add(normalCand);
+            candidates = set;
+        }
 
         if (!snap.staff().isEmpty()) {
             ctx.getSource().sendSuccess(
                     () -> Component.translatable("smartqueue.command.status.queue_header_staff",
                             snap.staff().size()), false);
-            renderQueueEntries(ctx, snap.staff(), next, "smartqueue.command.status.staff");
+            renderQueueEntries(ctx, snap.staff(), next, true, candidates,
+                    "smartqueue.command.status.staff");
         }
 
         if (!snap.priority().isEmpty()) {
             ctx.getSource().sendSuccess(
                     () -> Component.translatable("smartqueue.command.status.queue_header_priority",
                             snap.priority().size()), false);
-            renderQueueEntries(ctx, snap.priority(), next,
+            renderQueueEntries(ctx, snap.priority(), next, nextCertain, candidates,
                     "smartqueue.command.status.priority_rejoin");
         }
 
@@ -231,14 +270,16 @@ public final class QueueCommands {
             ctx.getSource().sendSuccess(
                     () -> Component.translatable("smartqueue.command.status.queue_header_vip",
                             snap.vip().size()), false);
-            renderQueueEntries(ctx, snap.vip(), next, "smartqueue.command.status.vip");
+            renderQueueEntries(ctx, snap.vip(), next, nextCertain, candidates,
+                    "smartqueue.command.status.vip");
         }
 
         if (!snap.normal().isEmpty()) {
             ctx.getSource().sendSuccess(
                     () -> Component.translatable("smartqueue.command.status.queue_header_normal",
                             snap.normal().size()), false);
-            renderQueueEntries(ctx, snap.normal(), next, "smartqueue.command.status.normal");
+            renderQueueEntries(ctx, snap.normal(), next, nextCertain, candidates,
+                    "smartqueue.command.status.normal");
         }
 
         return 1;
@@ -298,15 +339,24 @@ public final class QueueCommands {
     }
 
     private static void renderQueueEntries(CommandContext<CommandSourceStack> ctx,
-                                           List<QueueEntry> entries, QueueEntry next, String typeKey) {
+                                           List<QueueEntry> entries, QueueEntry next,
+                                           boolean nextCertain, Set<QueueEntry> candidates,
+                                           String typeKey) {
         for (int i = 0; i < entries.size(); i++) {
             QueueEntry entry = entries.get(i);
             final int pos = i + 1;
             boolean isNext = (next != null && entry == next);
+            boolean isCandidate = candidates.contains(entry);
+            String key;
+            if (isNext && nextCertain) {
+                key = "smartqueue.command.status.queue_entry_next";
+            } else if (isCandidate) {
+                key = "smartqueue.command.status.queue_entry_candidate";
+            } else {
+                key = "smartqueue.command.status.queue_entry";
+            }
             ctx.getSource().sendSuccess(
-                    () -> Component.translatable(
-                            isNext ? "smartqueue.command.status.queue_entry_next"
-                                    : "smartqueue.command.status.queue_entry",
+                    () -> Component.translatable(key,
                             pos, Component.translatable(typeKey), entry.getName()), false);
         }
     }

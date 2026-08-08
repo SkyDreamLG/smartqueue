@@ -124,8 +124,13 @@ public class QueueScreen extends Screen {
         // Ahead count
         int ahead = ClientQueueState.getAhead();
         if (ahead == 0) {
-            Component nextText = Component.translatable("smartqueue.screen.next");
-            graphics.drawCenteredString(font, nextText, centerX, y, 0x55FF55);
+            if (ClientQueueState.isBlocked()) {
+                Component blockedText = Component.translatable("smartqueue.screen.blocked");
+                graphics.drawCenteredString(font, blockedText, centerX, y, 0xFFAA00);
+            } else {
+                Component nextText = Component.translatable("smartqueue.screen.next");
+                graphics.drawCenteredString(font, nextText, centerX, y, 0x55FF55);
+            }
         } else {
             Component aheadText = Component.translatable("smartqueue.screen.ahead", ahead);
             graphics.drawCenteredString(font, aheadText, centerX, y, 0xCCCCCC);

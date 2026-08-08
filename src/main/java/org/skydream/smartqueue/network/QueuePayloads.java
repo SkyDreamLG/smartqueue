@@ -16,7 +16,7 @@ public final class QueuePayloads {
                                      boolean showDetail, boolean staffBypassQueue,
                                      int totalStaff, int totalPriority, int totalVip, int totalNormal,
                                      int aheadStaff, int aheadPriority, int aheadVip, int aheadNormal,
-                                     int playerQueueOrdinal)
+                                     int playerQueueOrdinal, boolean blocked)
             implements CustomPacketPayload {
 
         public static final Type<QueueStatusPayload> TYPE =
@@ -43,6 +43,7 @@ public final class QueuePayloads {
                             buf.writeVarInt(payload.aheadVip);
                             buf.writeVarInt(payload.aheadNormal);
                             buf.writeVarInt(payload.playerQueueOrdinal);
+                            buf.writeBoolean(payload.blocked);
                         },
                         buf -> new QueueStatusPayload(
                                 buf.readVarInt(),
@@ -62,7 +63,8 @@ public final class QueuePayloads {
                                 buf.readVarInt(),
                                 buf.readVarInt(),
                                 buf.readVarInt(),
-                                buf.readVarInt()
+                                buf.readVarInt(),
+                                buf.readBoolean()
                         )
                 );
 
